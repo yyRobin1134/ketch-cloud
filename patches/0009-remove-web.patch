@@ -1,0 +1,381 @@
+--- a/app/ios/ContentView.swift
++++ b/app/ios/ContentView.swift
+@@ -15,7 +15,6 @@
+ 
+ struct ContentView: View {
+   let incoming: IncomingDownloads
+-  @State private var showingUCBrowser = false
+   @State private var showingCloud = false
+   @State private var cloudSeed: String?
+   @State private var clipboardLink: String?
+@@ -64,15 +63,6 @@
+         }
+       HStack(spacing: 8) {
+         Button {
+-          showingUCBrowser = true
+-        } label: {
+-          Label("Web", systemImage: "globe")
+-            .padding(.horizontal, 14)
+-            .padding(.vertical, 10)
+-            .background(.regularMaterial, in: Capsule())
+-        }
+-        .accessibilityLabel("Open cloud login browser")
+-        Button {
+           showingCloud = true
+         } label: {
+           Label("Cloud", systemImage: "icloud.and.arrow.down")
+@@ -93,8 +83,5 @@
+     .sheet(isPresented: $showingCloud, onDismiss: { cloudSeed = nil }) {
+       CloudView(incoming: incoming, initialText: cloudSeed)
+     }
+-    .sheet(isPresented: $showingUCBrowser) {
+-      UCBrowserView(incoming: incoming)
+-    }
+   }
+ }
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -9,7 +9,6 @@
+ /* Begin PBXBuildFile section */
+ 		A001 /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001 /* iOSApp.swift */; };
+ 		A002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002 /* ContentView.swift */; };
+-		A005 /* UCBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B015 /* UCBrowserView.swift */; };
+ 		A006 /* CloudView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016 /* CloudView.swift */; };
+ 		A007 /* WebPageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B017 /* WebPageLoader.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+@@ -20,7 +19,6 @@
+ 		8676F78D2F3CDCA000DE65CF /* Ketch-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Ketch-Info.plist"; sourceTree = "<group>"; };
+ 		B001 /* iOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSApp.swift; sourceTree = "<group>"; };
+ 		B002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+-		B015 /* UCBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UCBrowserView.swift; sourceTree = "<group>"; };
+ 		B016 /* CloudView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudView.swift; sourceTree = "<group>"; };
+ 		B017 /* WebPageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageLoader.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+@@ -64,7 +62,6 @@
+ 			children = (
+ 				B001 /* iOSApp.swift */,
+ 				B002 /* ContentView.swift */,
+-				B015 /* UCBrowserView.swift */,
+ 				B016 /* CloudView.swift */,
+ 				B017 /* WebPageLoader.swift */,
+ 			);
+@@ -197,7 +194,6 @@
+ 			files = (
+ 				A001 /* iOSApp.swift in Sources */,
+ 				A002 /* ContentView.swift in Sources */,
+-				A005 /* UCBrowserView.swift in Sources */,
+ 				A006 /* CloudView.swift in Sources */,
+ 				A007 /* WebPageLoader.swift in Sources */,
+ 			);
+diff --git a/app/ios/UCBrowserView.swift b/app/ios/UCBrowserView.swift
+deleted file mode 100644
+--- a/app/ios/UCBrowserView.swift
++++ /dev/null
+@@ -1,307 +0,0 @@
+-import SwiftUI
+-import WebKit
+-import KetchApp
+-
+-/// A cookie-login cloud drive the in-app browser can hand downloads over for. Cookies are only
+-/// ever sent to hosts ending in one of [hostSuffixes], and only when every [sessionCookies] name
+-/// is present and unexpired.
+-private struct SiteProfile: Identifiable, Hashable {
+-  let id: String
+-  let name: String
+-  let startURL: String
+-  let referer: String
+-  let hostSuffixes: [String]
+-  let sessionCookies: [String]
+-}
+-
+-private let siteProfiles: [SiteProfile] = [
+-  SiteProfile(id: "uc", name: "UC", startURL: "https://drive.uc.cn/", referer: "https://drive.uc.cn/",
+-              hostSuffixes: ["uc.cn"], sessionCookies: ["__pus", "__puus"]),
+-  SiteProfile(id: "quark", name: "Quark", startURL: "https://pan.quark.cn/",
+-              referer: "https://pan.quark.cn/", hostSuffixes: ["quark.cn"],
+-              sessionCookies: ["__pus", "__puus"]),
+-  SiteProfile(id: "baidu", name: "Baidu", startURL: "https://pan.baidu.com/",
+-              referer: "https://pan.baidu.com/", hostSuffixes: ["baidu.com", "baidupcs.com"],
+-              sessionCookies: ["BDUSS"]),
+-  SiteProfile(id: "115", name: "115", startURL: "https://115.com/", referer: "https://115.com/",
+-              hostSuffixes: ["115.com"], sessionCookies: ["UID", "SEID"]),
+-]
+-
+-private func hostMatches(_ host: String?, _ profile: SiteProfile) -> Bool {
+-  guard let host = host?.lowercased() else { return false }
+-  return profile.hostSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
+-}
+-
+-/// UC login remains in WebKit's persistent store across Ketch restarts.
+-/// The store is Ketch's, not Safari's: the user logs in once inside this browser.
+-struct UCBrowserView: View {
+-  @Environment(\.dismiss) private var dismiss
+-  @StateObject private var browser: UCBrowserSession
+-
+-  init(incoming: IncomingDownloads) {
+-    _browser = StateObject(wrappedValue: UCBrowserSession(incoming: incoming))
+-  }
+-
+-  var body: some View {
+-    NavigationView {
+-      VStack(spacing: 8) {
+-        HStack(spacing: 10) {
+-          TextField("URL", text: $browser.address)
+-            .textContentType(.URL)
+-            .keyboardType(.URL)
+-            .textInputAutocapitalization(.never)
+-            .autocorrectionDisabled()
+-            .submitLabel(.go)
+-            .onSubmit { browser.go() }
+-          Button("Go") { browser.go() }
+-          Button {
+-            browser.sendCurrentToKetch()
+-          } label: {
+-            Label("Send to Ketch", systemImage: "arrow.down.circle")
+-          }
+-        }
+-        .padding(.horizontal)
+-        if let status = browser.status {
+-          Text(status)
+-            .font(.footnote)
+-            .foregroundStyle(.secondary)
+-            .padding(.horizontal)
+-        }
+-        UCWebView(webView: browser.webView)
+-      }
+-      .navigationTitle("Web")
+-      .navigationBarTitleDisplayMode(.inline)
+-      .toolbar {
+-        ToolbarItem(placement: .navigationBarLeading) {
+-          Button("Close") { dismiss() }
+-        }
+-        ToolbarItemGroup(placement: .bottomBar) {
+-          Menu {
+-            ForEach(siteProfiles) { site in
+-              Button(site.name) { browser.select(site) }
+-            }
+-          } label: { Text(browser.site.name) }
+-          Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
+-          Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }
+-          Spacer()
+-          Button { browser.confirmLogout = true } label: { Image(systemName: "rectangle.portrait.and.arrow.right") }
+-          Button { browser.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
+-        }
+-      }
+-    }
+-    .navigationViewStyle(.stack)
+-    .alert("Sign out of \(browser.site.name)?", isPresented: $browser.confirmLogout) {
+-      Button("Sign out", role: .destructive) { browser.logout() }
+-      Button("Cancel", role: .cancel) {}
+-    } message: {
+-      Text("Clears this site's login stored inside Ketch. Saved Ketch downloads keep their own headers.")
+-    }
+-  }
+-}
+-
+-/// Hosts whichever site's web view is current, so switching sites swaps views instead of reloading.
+-private struct UCWebView: UIViewRepresentable {
+-  let webView: WKWebView
+-
+-  func makeUIView(context: Context) -> UIView { UIView() }
+-
+-  func updateUIView(_ container: UIView, context: Context) {
+-    guard webView.superview !== container else { return }
+-    container.subviews.forEach { $0.removeFromSuperview() }
+-    webView.frame = container.bounds
+-    webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+-    container.addSubview(webView)
+-  }
+-}
+-
+-@MainActor
+-private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
+-  @Published var address = "https://drive.uc.cn/"
+-  @Published var status: String?
+-  @Published var confirmLogout = false
+-  @Published var site = siteProfiles[0]
+-  @Published private(set) var webView: WKWebView
+-  private var pages: [String: WKWebView] = [:]
+-  private let incoming: IncomingDownloads
+-
+-  init(incoming: IncomingDownloads) {
+-    self.incoming = incoming
+-    self.webView = UCBrowserSession.makeWebView()
+-    super.init()
+-    attach(webView, for: siteProfiles[0])
+-  }
+-
+-  private static func makeWebView() -> WKWebView {
+-    let config = WKWebViewConfiguration()
+-    // Important: nonpersistent() would log out after closing the browser or app.
+-    config.websiteDataStore = WKWebsiteDataStore.default()
+-    return WKWebView(frame: .zero, configuration: config)
+-  }
+-
+-  private func attach(_ view: WKWebView, for profile: SiteProfile) {
+-    view.navigationDelegate = self
+-    view.uiDelegate = self
+-    pages[profile.id] = view
+-    view.load(URLRequest(url: URL(string: profile.startURL)!))
+-  }
+-
+-  func go() {
+-    let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
+-    guard let url = URL(string: raw.contains("://") ? raw : "https://" + raw),
+-          url.scheme?.lowercased() == "https",
+-          url.host != nil else {
+-      status = "Please enter a valid HTTPS URL."
+-      return
+-    }
+-    status = nil
+-    webView.load(URLRequest(url: url))
+-  }
+-
+-  func sendCurrentToKetch() {
+-    guard let url = webView.url else {
+-      status = "No URL is open."
+-      return
+-    }
+-    queue(url: url, from: webView.url)
+-  }
+-
+-  private func profile(for host: String?) -> SiteProfile? {
+-    siteProfiles.first { hostMatches(host, $0) }
+-  }
+-
+-  func select(_ profile: SiteProfile) {
+-    site = profile
+-    status = nil
+-    if let existing = pages[profile.id] {
+-      webView = existing
+-    } else {
+-      let created = UCBrowserSession.makeWebView()
+-      attach(created, for: profile)
+-      webView = created
+-    }
+-    address = webView.url?.absoluteString ?? profile.startURL
+-  }
+-
+-  private func queue(url: URL, from page: URL?) {
+-    guard url.scheme?.lowercased() == "https", url.host != nil else {
+-      status = "Only HTTPS download URLs are supported."
+-      return
+-    }
+-    // UC download links often redirect to storage hosts outside uc.cn. Those still need the UC
+-    // referer, but the session cookies are only ever sent to uc.cn hosts.
+-    let target = profile(for: url.host)
+-    let origin = target ?? site
+-    let referer = (hostMatches(page?.host, origin) ? page?.absoluteString : nil) ?? origin.referer
+-    webView.evaluateJavaScript("navigator.userAgent") { [weak self] agent, _ in
+-      guard let self else { return }
+-      let userAgent = agent as? String ?? ""
+-      self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+-        if let target, !Self.hasSession(cookies, target) {
+-          self.status = "\(target.name) login missing or expired. Sign in again."
+-          return
+-        }
+-        let applicable = target != nil ? cookies.filter { Self.applies($0, to: url) } : []
+-        let cookieHeader = applicable.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+-        self.incoming.offerBrowserDownload(
+-          url: url.absoluteString,
+-          referer: referer,
+-          cookieHeader: cookieHeader,
+-          userAgent: userAgent
+-        )
+-        self.status = "Sent to Ketch. Check the download sheet to confirm."
+-      }
+-    }
+-  }
+-
+-  /// A usable login carries every cookie the profile names, unexpired, on one of its domains.
+-  private static func hasSession(_ cookies: [HTTPCookie], _ profile: SiteProfile) -> Bool {
+-    let live = cookies.filter { cookie in
+-      let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+-      return profile.hostSuffixes.contains { domain == $0 || domain.hasSuffix("." + $0) } &&
+-        (cookie.expiresDate.map { $0 > Date() } ?? true)
+-    }
+-    return profile.sessionCookies.allSatisfy { name in live.contains { $0.name == name } }
+-  }
+-
+-  func logout() {
+-    let store = WKWebsiteDataStore.default()
+-    store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { records in
+-      let site = self.site
+-      let siteRecords = records.filter { record in
+-        site.hostSuffixes.contains { record.displayName.lowercased().hasSuffix($0) }
+-      }
+-      store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: siteRecords) {
+-        Task { @MainActor in
+-          self.status = "Signed out of \(site.name)."
+-          self.webView.load(URLRequest(url: URL(string: site.startURL)!))
+-        }
+-      }
+-    }
+-  }
+-
+-  private static func applies(_ cookie: HTTPCookie, to url: URL) -> Bool {
+-    guard let host = url.host?.lowercased() else { return false }
+-    let domain = cookie.domain.lowercased()
+-    let bare = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+-    let domainOK = domain.hasPrefix(".")
+-      ? (host == bare || host.hasSuffix("." + bare))
+-      : host == bare
+-    guard domainOK else { return false }
+-    guard !cookie.isSecure || url.scheme == "https" else { return false }
+-    if let expires = cookie.expiresDate, expires <= Date() { return false }
+-    let requestPath = url.path.isEmpty ? "/" : url.path
+-    let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
+-    guard requestPath == cookiePath || requestPath.hasPrefix(
+-      cookiePath.hasSuffix("/") ? cookiePath : cookiePath + "/"
+-    ) else { return false }
+-    // Prevent header injection even if website data becomes corrupted.
+-    let unsafe = CharacterSet.newlines.union(.controlCharacters)
+-    return cookie.name.rangeOfCharacter(from: unsafe) == nil &&
+-      cookie.value.rangeOfCharacter(from: unsafe) == nil
+-  }
+-
+-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+-    if webView === self.webView, let url = webView.url { address = url.absoluteString }
+-  }
+-
+-  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+-               withError error: Error) {
+-    status = error.localizedDescription
+-  }
+-
+-  // A normal top-level attachment is handed to the Ketch download sheet. This does not sniff
+-  // fetch/XHR/blob downloads inside the page; those require a separate resource sniffer.
+-  func webView(_ webView: WKWebView,
+-               decidePolicyFor navigationResponse: WKNavigationResponse,
+-               decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+-    guard navigationResponse.isForMainFrame,
+-          let response = navigationResponse.response as? HTTPURLResponse,
+-          (200...299).contains(response.statusCode),
+-          let url = response.url,
+-          profile(for: url.host) != nil || profile(for: webView.url?.host) != nil else {
+-      decisionHandler(.allow)
+-      return
+-    }
+-    let disposition = response.allHeaderFields.first {
+-      String(describing: $0.key).lowercased() == "content-disposition"
+-    }.map { String(describing: $0.value).lowercased() } ?? ""
+-    if disposition.contains("attachment") ||
+-       response.mimeType?.lowercased() == "application/octet-stream" {
+-      decisionHandler(.cancel)
+-      queue(url: url, from: webView.url)
+-    } else {
+-      decisionHandler(.allow)
+-    }
+-  }
+-
+-  // Some sites open the signed download URL in a new tab. Reuse this browser's cookie store.
+-  func webView(_ webView: WKWebView,
+-               createWebViewWith configuration: WKWebViewConfiguration,
+-               for navigationAction: WKNavigationAction,
+-               windowFeatures: WKWindowFeatures) -> WKWebView? {
+-    if navigationAction.targetFrame == nil {
+-      webView.load(navigationAction.request)
+-    }
+-    return nil
+-  }
+-}
