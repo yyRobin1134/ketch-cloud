@@ -18,6 +18,8 @@
 
 package com.yunx.app.data.network.video
 
+import kotlin.concurrent.Volatile
+
 /** What a platform's hidden web view must provide: load a page, wait until it is ready, read a value. */
 interface HeadlessWebEngine {
   suspend fun loadAndExtract(

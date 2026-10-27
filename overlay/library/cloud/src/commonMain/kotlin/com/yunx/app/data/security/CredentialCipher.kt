@@ -35,4 +35,9 @@ internal class PlaintextCredentialCipher : CredentialCipher {
   override fun isEncrypted(stored: String): Boolean = false
 
   override fun decrypt(stored: String, purpose: String): String = stored
+
+  companion object {
+    /** One instance shared by every caller, as in the Android original. */
+    val shared: CredentialCipher by lazy { PlaintextCredentialCipher() }
+  }
 }
