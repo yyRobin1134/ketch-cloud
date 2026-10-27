@@ -19,7 +19,6 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.IO
-import kotlin.concurrent.Volatile
 
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.PlayLink
@@ -92,16 +91,7 @@ class UCApi(
      */
     var cookieSink: ((merged: String, requestCookie: String) -> Unit)? = null
 
-    /**
-     * 游客态令牌 `__pugs`（未登录取链响应 Set-Cookie 下发，3 小时有效）。
-     * UC 下载层只认这一个 cookie：缺它 OSS 直链直接 403（RequestDeniedByCallback）。
-     * 进程内复用，登录态路径完全不受影响（只在 [getGuestShareDownloadLink] 里读写）。
-     */
-    @Volatile
-    var guestPugs: String = ""
-        private set
-
-    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+        private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     // ---------- 账号 ----------
 
@@ -417,83 +407,7 @@ class UCApi(
         )
     }
 
-    /**
-     * 游客分享取链（未登录直链）：与 [getShareDownloadLink] 同一个端点、同一个 body
-     * （对齐 LinkSwift 分享页匿名链路：不带账号 Cookie，只带分享参数 + uc-cloud-drive 客户端 UA）。
-     *
-     * 下载层只认一个 cookie —— 服务端随本次响应 Set-Cookie 下发的游客态 `__pugs`
-     * （3 小时有效，且与本次直链同响应绑定；缺它 CDN 直接 403 RequestDeniedByCallback）。
-     * 这里捕获后写进 [DownloadLink.guestCookie]，同时缓存到 [guestPugs] 供后续文件复用。
-     *
-     * @throws QuarkApiException 需登录（31001）、超出游客大小上限（23018）、令牌失效（14001/41020）等
-     */
-    suspend fun getGuestShareDownloadLink(
-        fid: String,
-        fidToken: String,
-        stoken: String,
-        pwdId: String
-    ): DownloadLink? = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("fids", JSONArray().put(fid))
-            .put("pwd_id", pwdId)
-            .put("stoken", stoken)
-            .put("fids_token", JSONArray().put(fidToken))
-            .toString()
-        val request = postJsonGuest(UCConstants.DOWNLOAD_URL, guestPugs, body)
-        val response = client.newCall(request).execute()
-        // 先取本次响应的 __pugs（与本次直链同响应绑定，不能用别的响应/上一次的值）
-        val responsePugs = pugsFromSetCookies(response.headers("Set-Cookie"))
-        val bodyStr = response.use {
-            it.body?.string() ?: throw QuarkApiException("获取下载链接失败：响应为空")
-        }
-        if (responsePugs != null) guestPugs = responsePugs
-        val json = runCatching { JSONObject(bodyStr) }.getOrElse {
-            // 非 JSON（风控页/HTML 错误页）时带上 HTTP 状态码，便于分辨 401/403 与分享失效
-            throw QuarkApiException("响应解析失败（HTTP ${response.code}）")
-        }
-        val code = json.optInt("code")
-        if (json.optInt("status") != 200 && code != 0) {
-            throw QuarkApiException(guestErrorMessage(code, json.optString("message")), code)
-        }
-        val array = json.optJSONArray("data") ?: throw QuarkApiException("响应缺少 data")
-        if (array.length() == 0) throw QuarkApiException("未返回下载链接")
-        val item = array.optJSONObject(0) ?: throw QuarkApiException("未返回下载链接")
-        DownloadLink(
-            fid = item.optString("fid"),
-            filename = item.optString("file_name").ifEmpty { item.optString("filename") },
-            downloadUrl = item.optString("download_url"),
-            size = item.optLong("size"),
-            guestCookie = responsePugs ?: guestPugs
-        )
-    }
-
-    /** 游客取链的服务端错误码 → 中文提示（错误码表对齐 panweb-parser 的 UC 适配器） */
-    private fun guestErrorMessage(code: Int, message: String): String = when (code) {
-        31001 -> "该分享需要登录 UC 网盘后才能下载"
-        23018 -> "该文件超出游客可获取的大小上限，请先登录 UC 网盘再下载"
-        14001 -> "分享已失效或提取码有误，请重新解析"
-        41020 -> "文件令牌已过期，请重新解析分享"
-        else -> message.ifBlank { "获取下载链接失败" }
-    }
-
-    /** 从响应 Set-Cookie 里取出游客态令牌，返回可直接当 Cookie 头用的 `__pugs=值`；没有则 null */
-    private fun pugsFromSetCookies(setCookies: List<String>): String? =
-        setCookies.asSequence()
-            .map { it.substringBefore(';').trim() }
-            .firstOrNull { it.startsWith("__pugs=") && it.length > "__pugs=".length }
-
-    /** 游客请求构造：Cookie 为空时不发该头；UA/Sec-Ch-Ua 用 uc-cloud-drive 客户端（游客链路风控更严） */
-    private fun postJsonGuest(url: String, cookie: String, body: String): Request =
-        Request.Builder()
-            .url(url)
-            .apply { if (cookie.isNotBlank()) header("Cookie", cookie) }
-            .header("User-Agent", UCConstants.GUEST_UA)
-            .header("Sec-Ch-Ua", UCConstants.GUEST_SEC_CH_UA)
-            .header("Content-Type", "application/json")
-            .post(body.toRequestBody(jsonMediaType))
-            .build()
-
-suspend fun getDownloadLink(fid: String, cookie: String): DownloadLink? = withContext(Dispatchers.IO) {
+                suspend fun getDownloadLink(fid: String, cookie: String): DownloadLink? = withContext(Dispatchers.IO) {
         val body = JSONObject().put("fids", JSONArray().put(fid)).toString()
         val request = postJson(UCConstants.DOWNLOAD_URL, cookie, body)
         val response = client.newCall(request).execute()
@@ -578,97 +492,6 @@ suspend fun getDownloadLink(fid: String, cookie: String): DownloadLink? = withCo
             downloadUrl = item.optString("download_url"),
             size = item.optLong("size")
         )
-    }
-
-        /**
-     * 分享视频预览（原画直链，绕过非会员视频下载被换成宣传片的问题）。
-     * GET share/sharepage/video_preview？pwd_id/stoken/fid/fid_token →
-     * data.play_info.url（原画 OSS 直链，走播放回调 checkplay 不换片）+ size（原画大小，可校验）。
-     * 仅对分享态视频有意义；链接约 3 小时有效（x-ttl=10800）。
-     */
-    suspend fun getVideoPreview(
-        pwdId: String,
-        stoken: String,
-        fid: String,
-        fidToken: String,
-        cookie: String
-    ): DownloadLink? = withContext(Dispatchers.IO) {
-        val url = buildString {
-            append(UCConstants.VIDEO_PREVIEW_URL)
-            append("?pr=UCBrowser&fr=h5")
-            append("&pwd_id=").append(URLEncoder.encode(pwdId, "UTF-8"))
-            append("&stoken=").append(URLEncoder.encode(stoken, "UTF-8"))
-            append("&fid=").append(URLEncoder.encode(fid, "UTF-8"))
-            append("&fid_token=").append(URLEncoder.encode(fidToken, "UTF-8"))
-        }
-        val request = Request.Builder()
-            .url(url)
-            .header("Cookie", cookie)
-            .header("User-Agent", UCConstants.USER_AGENT)
-            .header("Origin", UCConstants.WEB_ORIGIN)
-            .header("Referer", UCConstants.DOWNLOAD_REFERER)
-            .header("Content-Type", "application/json")
-            .get()
-            .build()
-        runCatching {
-            val resp = client.newCall(request).execute()
-            val json = JSONObject(resp.use { it.body?.string() } ?: "{}")
-            if (json.optInt("status") != 200 && json.optInt("code") != 0) return@runCatching null
-            val data = json.optJSONObject("data") ?: return@runCatching null
-            val playInfo = data.optJSONObject("play_info") ?: return@runCatching null
-            val directUrl = playInfo.optString("url").takeIf { it.isNotBlank() } ?: return@runCatching null
-            DownloadLink(
-                fid = fid,
-                filename = "",
-                downloadUrl = directUrl,
-                size = playInfo.optLong("size")
-            )
-        }.getOrNull()
-    }
-
-    /**
-     * UC 转码播放流（绕过非会员视频下载被换成宣传片的问题）。
-     * POST file/v2/play/project → data.video_list[].video_info.url（m3u8/fmp4）。
-     * 仅对视频有意义；返回首个非空播放地址 + 其清晰度。
-     * 先试带 pr/fr 的主路径；失败则用裸路径重试（Alist getTranscodingLink 方式，对 UC 也可通）。
-     */
-    suspend fun getPlayLink(fid: String, cookie: String): PlayLink? = withContext(Dispatchers.IO) {
-        playProject(UCConstants.PLAY_URL, fid, cookie)
-            ?: playProject("${UCConstants.API_BASE}/1/clouddrive/file/v2/play/project", fid, cookie)
-    }
-
-    private fun playProject(url: String, fid: String, cookie: String): PlayLink? {
-        val body = JSONObject()
-            .put("fid", fid)
-            .put("resolutions", "low,normal,high,super,2k,4k")
-            .put("supports", "fmp4_av,m3u8,dolby_vision")
-            .toString()
-        val request = Request.Builder()
-            .url(url)
-            .header("Cookie", cookie)
-            .header("User-Agent", UCConstants.USER_AGENT)
-            .header("Content-Type", "application/json;charset=UTF-8")
-            .header("Origin", UCConstants.WEB_ORIGIN)
-            .header("Referer", UCConstants.DOWNLOAD_REFERER)
-            .post(body.toRequestBody(jsonMediaType))
-            .build()
-        return runCatching {
-            val resp = client.newCall(request).execute()
-            val json = JSONObject(resp.use { it.body?.string() } ?: "{}")
-            if (json.optInt("status") != 200 && json.optInt("code") != 0) return@runCatching null
-            val list = json.optJSONObject("data")?.optJSONArray("video_list") ?: return@runCatching null
-            for (i in 0 until list.length()) {
-                val info = list.optJSONObject(i)?.optJSONObject("video_info") ?: continue
-                val u = info.optString("url").takeIf { it.isNotBlank() } ?: continue
-                return@runCatching PlayLink(
-                    url = u,
-                    resolution = info.optString("resolution"),
-                    format = info.optString("format"),
-                    isHls = u.contains(".m3u8") || info.optString("format").contains("m3u8", true)
-                )
-            }
-            null
-        }.getOrNull()
     }
 
     /** 删除文件（抓包：action_type=2 + filelist + exclude_fids）；返回 task_id */

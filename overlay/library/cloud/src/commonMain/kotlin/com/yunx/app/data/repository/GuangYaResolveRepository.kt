@@ -154,15 +154,4 @@ class GuangYaResolveRepository(
         runCatching { api.deleteFiles(token, listOf(dirFid)) }
     }
 
-    override suspend fun getGuestShareDownloadLink(
-        session: ShareSession,
-        file: ShareFile
-    ): Result<DownloadLink> = runCatching {
-        try {
-            api.getShareDownloadUrl(file, session.stoken)
-                ?: throw IllegalStateException("光鸭未返回有效下载地址，请确认下载权限")
-        } catch (e: GuangYaShareRestrictedException) {
-            throw IllegalStateException("该光鸭分享需登录并转存后下载，请先登录光鸭云盘")
-        }
-    }
 }

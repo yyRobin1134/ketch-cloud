@@ -28,6 +28,47 @@ FIXUPS = {
             r"\1.decodeToString()",
         ),
     ],
+    # Deliberately not ported: YunX's anonymous "guest" download links (a spoofed desktop-client
+    # user agent used to get past stricter risk checks) and the membership-wall workarounds
+    # (preview/transcoded-stream links used to avoid the promo replacement for non-members).
+    # Account-authenticated links stay.
+    "data/network/UCApi.kt": [
+        ("__remove_fun__", "getGuestShareDownloadLink"),
+        ("__remove_fun__", "guestErrorMessage"),
+        ("__remove_expr_fun__", "pugsFromSetCookies"),
+        ("__remove_expr_fun__", "postJsonGuest"),
+        ("__remove_fun__", "getVideoPreview"),
+        ("__remove_fun__", "getPlayLink"),
+        ("__remove_fun__", "playProject"),
+        ("__remove_decl__", "guestPugs"),
+    ],
+    "data/network/QuarkApi.kt": [
+        ("__remove_fun__", "getGuestShareDownloadLink"),
+        ("__remove_fun__", "guestErrorMessage"),
+        ("__remove_expr_fun__", "pugsFromSetCookies"),
+        ("__remove_expr_fun__", "postJsonGuest"),
+        ("__remove_decl__", "guestPugs"),
+    ],
+    "data/network/UCConstants.kt": [
+        ("__remove_decl__", "GUEST_UA"),
+        ("__remove_decl__", "GUEST_SEC_CH_UA"),
+        ("__remove_decl__", "PLAY_URL"),
+        ("__remove_decl__", "VIDEO_PREVIEW_URL"),
+    ],
+    "data/repository/UCResolveRepository.kt": [
+        ("__remove_expr_fun__", "getGuestShareDownloadLink"),
+        (
+            r"re:        // 视频：优先用分享态.*?\n        \}\n(?=        api\.getShareDownloadLink\()",
+            "",
+        ),
+    ],
+    "data/repository/QuarkResolveRepository.kt": [("__remove_expr_fun__", "getGuestShareDownloadLink")],
+    "data/repository/GuangYaResolveRepository.kt": [("__remove_expr_fun__", "getGuestShareDownloadLink")],
+    "data/repository/ILanzouResolveRepository.kt": [("__remove_expr_fun__", "getGuestShareDownloadLink")],
+    "data/repository/LanzouResolveRepository.kt": [("__remove_expr_fun__", "getGuestShareDownloadLink")],
+    "data/repository/ShareResolveRepository.kt": [
+        ("__remove_expr_fun__", "getGuestShareDownloadLink"),
+    ],
     # The Android WebView helpers; the iOS login screen lives in Swift.
     "data/network/XunleiWebCredential.kt": [
         ("__remove_fun__", "applyDesktopClientHints"),

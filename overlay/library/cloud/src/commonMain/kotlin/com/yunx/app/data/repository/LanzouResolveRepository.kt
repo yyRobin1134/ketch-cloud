@@ -82,12 +82,4 @@ class LanzouResolveRepository(
         api.getShareDownloadLink(page, file, session.stoken.takeIf { it.isNotBlank() })
     }
 
-    override suspend fun getGuestShareDownloadLink(
-        session: ShareSession,
-        file: ShareFile
-    ): Result<DownloadLink> = runCatching {
-        val page = pageCache[session.shareId]
-            ?: throw IllegalStateException("蓝奏分享会话已失效，请重新解析")
-        api.getShareDownloadLink(page, file, session.stoken.takeIf { it.isNotBlank() })
-    }
 }

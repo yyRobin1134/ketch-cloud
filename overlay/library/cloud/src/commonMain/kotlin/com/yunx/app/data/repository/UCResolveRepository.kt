@@ -117,25 +117,6 @@ class UCResolveRepository(private val api: UCApi) : ShareResolveRepository {
         file: ShareFile,
         cookie: String
     ): Result<DownloadLink> = runCatching {
-        // 视频：优先用分享态 video_preview 取**原画**直链（走播放回调 checkplay，不换片，绕过宣传片替换）
-        if (isVideo(file.fname)) {
-            val preview = api.getVideoPreview(
-                pwdId = session.shareId,
-                stoken = session.stoken,
-                fid = file.fid,
-                fidToken = file.fidToken,
-                cookie = cookie
-            )
-            if (preview != null) {
-                return@runCatching DownloadLink(
-                    fid = file.fid,
-                    filename = file.fname,
-                    downloadUrl = preview.downloadUrl,
-                    size = preview.size,
-                    isHls = false
-                )
-            }
-        }
         api.getShareDownloadLink(
             fid = file.fid,
             fidToken = file.fidToken,
@@ -148,23 +129,4 @@ class UCResolveRepository(private val api: UCApi) : ShareResolveRepository {
         onFailure = { Result.failure(it) }
     )
 
-    /**
-     * 游客取链（未登录）：与登录态同一条 download 接口，只是不带账号 Cookie，
-     * 由服务端下发游客态 __pugs（UC 实测大文件也放行，不做大小限制）。
-     * 视频不走 video_preview —— 那条链路依赖登录态，这里直接取普通直链。
-     */
-    override suspend fun getGuestShareDownloadLink(
-        session: ShareSession,
-        file: ShareFile
-    ): Result<DownloadLink> = runCatching {
-        api.getGuestShareDownloadLink(
-            fid = file.fid,
-            fidToken = file.fidToken,
-            stoken = session.stoken,
-            pwdId = session.shareId
-        ) ?: throw IllegalStateException("获取下载链接失败")
-    }.fold(
-        onSuccess = { Result.success(it) },
-        onFailure = { Result.failure(it) }
-    )
 }

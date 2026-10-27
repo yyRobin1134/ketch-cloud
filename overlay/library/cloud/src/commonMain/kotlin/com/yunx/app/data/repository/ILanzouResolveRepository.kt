@@ -71,15 +71,6 @@ class ILanzouResolveRepository(
         api.shareDownload(session.stoken, fileId, userId, uuid())
     }
 
-    override suspend fun getGuestShareDownloadLink(
-        session: ShareSession,
-        file: ShareFile
-    ): Result<DownloadLink> = runCatching {
-        if (file.isdir) throw IllegalStateException("文件夹无法直接下载")
-        val fileId = file.fid.removePrefix(ILanzouConstants.FILE_PREFIX)
-        api.shareDownload(session.stoken, fileId, "", uuid())
-    }
-
     override suspend fun transferFile(
         session: ShareSession,
         file: ShareFile,

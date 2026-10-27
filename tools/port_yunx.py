@@ -168,9 +168,44 @@ def rewrite_dot_all(text: str) -> str:
     return "".join(out)
 
 
+def remove_decl(text: str, name: str, rel: str) -> str:
+    """Drops a `const val` / `var` / `val` declaration, its annotations and KDoc, up to the next blank line."""
+    pattern = r"^[ \t]*(?:@\w+[ \t]*" + NL + r"[ \t]*)*(?:private |internal )?(?:const )?(?:val|var) " + re.escape(name) + r"\b"
+    m = re.search(pattern, text, re.M)
+    if not m:
+        print(f"  !! declaration not found in {rel}: {name}")
+        return text
+    start = m.start()
+    doc = re.search(r"/\*\*(?:(?!\*/).)*\*/[ \t]*" + NL + r"\Z", text[:start], re.S)
+    if doc:
+        start = doc.start()
+    end = text.find(NL + NL, m.end())
+    end = len(text) if end < 0 else end + 2
+    return text[:start] + text[end:]
+
+
+def remove_expr_function(text: str, name: str, rel: str) -> str:
+    """Drops an expression-bodied `fun name(...) = ...` up to the next blank line, with its KDoc."""
+    pattern = r"^[ \t]*(?:(?:private|internal|public|suspend|inline|override)\s+)*fun\s+" + re.escape(name) + r"\b"
+    m = re.search(pattern, text, re.M)
+    if not m:
+        print(f"  !! function not found in {rel}: {name}")
+        return text
+    start = m.start()
+    doc = re.search(r"/\*\*(?:(?!\*/).)*\*/[ \t]*" + NL + r"\Z", text[:start], re.S)
+    if doc:
+        start = doc.start()
+    blank = text.find(NL + NL, m.end())
+    closing = text.find(NL + "}", m.end())  # the enclosing class ends right after the function
+    if closing >= 0 and (blank < 0 or closing < blank):
+        return text[:start].rstrip(" " + NL) + NL + text[closing:]
+    end = len(text) if blank < 0 else blank + 2
+    return text[:start] + text[end:]
+
+
 def remove_function(text: str, name: str, rel: str) -> str:
     """Drops `fun name(...) { ... }` together with the KDoc comment right above it."""
-    pattern = r"^[ \t]*(?:(?:private|internal|public|suspend|inline)\s+)*fun\s+" + re.escape(name) + r"\b"
+    pattern = r"^[ \t]*(?:(?:private|internal|public|suspend|inline|override)\s+)*fun\s+" + re.escape(name) + r"\b"
     m = re.search(pattern, text, re.M)
     if not m:
         print(f"  !! function not found in {rel}: {name}")
@@ -219,6 +254,12 @@ def port(text: str, rel: str) -> str:
     for old, new in FIXUPS.get(rel, []):
         if old == "__remove_fun__":
             text = remove_function(text, new, rel)
+            continue
+        if old == "__remove_decl__":
+            text = remove_decl(text, new, rel)
+            continue
+        if old == "__remove_expr_fun__":
+            text = remove_expr_function(text, new, rel)
             continue
         if old.startswith("re:"):
             text, count = re.subn(old[3:], new, text, flags=re.S)
