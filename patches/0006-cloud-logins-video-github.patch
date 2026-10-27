@@ -1,0 +1,304 @@
+--- a/app/ios/CloudView.swift
++++ b/app/ios/CloudView.swift
+@@ -28,6 +28,7 @@
+ 
+   init(incoming: IncomingDownloads) {
+     self.incoming = incoming
++    service.installWebLoader(loader: WebPageLoaderImpl())
+     Task { await refreshLogin() }
+   }
+ 
+@@ -138,6 +139,7 @@
+   @Environment(\.dismiss) private var dismiss
+   @StateObject private var model: CloudModel
+   @State private var loginPlatform: CloudPlatform?
++  @State private var passwordPlatform: CloudPlatform?
+ 
+   init(incoming: IncomingDownloads) {
+     _model = StateObject(wrappedValue: CloudModel(incoming: incoming))
+@@ -147,7 +149,7 @@
+     NavigationView {
+       List {
+         Section(header: Text("Share link")) {
+-          TextField("Paste a share link or message", text: $model.input)
++          TextField("Share link, video link or GitHub repo", text: $model.input)
+             .textInputAutocapitalization(.never)
+             .autocorrectionDisabled()
+           TextField("Access code (optional)", text: $model.password)
+@@ -199,19 +201,22 @@
+         }
+ 
+         Section(header: Text("Accounts")) {
+-          ForEach(model.service.platforms(), id: \.id) { platform in
++          ForEach(model.service.platforms().filter { $0.loginKind != "none" }, id: \.id) { platform in
+             HStack {
+               Text(platform.name)
+               Spacer()
+               if model.loggedIn.contains(platform.id) {
+                 Button("Sign out") { model.logout(platform) }
+-              } else if platform.loginUrl != nil {
+-                Button("Sign in") { loginPlatform = platform }
++              } else if platform.loginKind == "password" {
++                Button("Sign in") { passwordPlatform = platform }
+               } else {
+-                Text("Not available yet").font(.footnote).foregroundColor(.secondary)
++                Button("Sign in") { loginPlatform = platform }
+               }
+             }
+           }
++          Text("Douyin, Kuaishou, Weibo, AcFun, Pixiv and GitHub links work without signing in. Quark and UC downloads need a signed-in account.")
++            .font(.footnote)
++            .foregroundColor(.secondary)
+         }
+       }
+       .navigationTitle("Cloud")
+@@ -227,6 +232,86 @@
+         Task { await model.refreshLogin() }
+       }
+     }
++    .sheet(item: $passwordPlatform) { platform in
++      CloudPasswordLoginView(platform: platform, service: model.service) {
++        Task { await model.refreshLogin() }
++      }
++    }
++  }
++}
++
++/// Account + password sign-in; Xunlei may then ask for the SMS code it sent.
++struct CloudPasswordLoginView: View {
++  @Environment(\.dismiss) private var dismiss
++  let platform: CloudPlatform
++  let service: CloudService
++  let onSaved: () -> Void
++
++  @State private var account = ""
++  @State private var password = ""
++  @State private var code = ""
++  @State private var waitingForCode = false
++  @State private var busy = false
++  @State private var message: String?
++
++  var body: some View {
++    NavigationView {
++      Form {
++        Section(header: Text(platform.name)) {
++          TextField("Account or phone", text: $account)
++            .textInputAutocapitalization(.never)
++            .autocorrectionDisabled()
++            .disabled(waitingForCode)
++          SecureField("Password", text: $password)
++            .disabled(waitingForCode)
++          if waitingForCode {
++            TextField("SMS code", text: $code)
++              .keyboardType(.numberPad)
++          }
++        }
++        if let message {
++          Section { Text(message).font(.footnote) }
++        }
++        Section {
++          Button(waitingForCode ? "Verify" : "Sign in") { submit() }
++            .disabled(busy || account.isEmpty || (waitingForCode ? code.isEmpty : password.isEmpty))
++        }
++      }
++      .navigationTitle("Sign in")
++      .navigationBarTitleDisplayMode(.inline)
++      .toolbar {
++        ToolbarItem(placement: .navigationBarLeading) {
++          Button("Cancel") { dismiss() }
++        }
++      }
++    }
++    .navigationViewStyle(.stack)
++  }
++
++  private func submit() {
++    busy = true
++    message = nil
++    Task {
++      defer { busy = false }
++      do {
++        let result: CloudLoginResult
++        if waitingForCode {
++          result = try await service.submitCode(platformId: platform.id, code: code)
++        } else {
++          result = try await service.loginWithPassword(
++            platformId: platform.id, account: account, password: password)
++        }
++        if result.ok {
++          onSaved()
++          dismiss()
++        } else {
++          waitingForCode = result.needsCode
++          message = result.message
++        }
++      } catch {
++        message = error.localizedDescription
++      }
++    }
+   }
+ }
+ 
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -11,6 +11,7 @@
+ 		A002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002 /* ContentView.swift */; };
+ 		A005 /* UCBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B015 /* UCBrowserView.swift */; };
+ 		A006 /* CloudView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016 /* CloudView.swift */; };
++		A007 /* WebPageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B017 /* WebPageLoader.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+ 		A004 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = D004 /* InfoPlist.strings */; };
+ /* End PBXBuildFile section */
+@@ -21,6 +22,7 @@
+ 		B002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+ 		B015 /* UCBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UCBrowserView.swift; sourceTree = "<group>"; };
+ 		B016 /* CloudView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudView.swift; sourceTree = "<group>"; };
++		B017 /* WebPageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageLoader.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		B004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+ 		B005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+@@ -64,6 +66,7 @@
+ 				B002 /* ContentView.swift */,
+ 				B015 /* UCBrowserView.swift */,
+ 				B016 /* CloudView.swift */,
++				B017 /* WebPageLoader.swift */,
+ 			);
+ 			name = Sources;
+ 			sourceTree = "<group>";
+@@ -196,6 +199,7 @@
+ 				A002 /* ContentView.swift in Sources */,
+ 				A005 /* UCBrowserView.swift in Sources */,
+ 				A006 /* CloudView.swift in Sources */,
++				A007 /* WebPageLoader.swift in Sources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
+--- a/app/ios/WebPageLoader.swift
++++ b/app/ios/WebPageLoader.swift
+@@ -0,0 +1,126 @@
++import UIKit
++import WebKit
++import KetchApp
++
++/// Loads a page in a hidden web view for the video sites whose data only exists once the page
++/// has run, polls until the page says it is ready, and hands back the extracted value as JSON text.
++/// The page is loaded as it is: no script touches the navigator or client hints.
++final class WebPageLoaderImpl: NSObject, WebPageLoader {
++  private var jobs: [HiddenPageJob] = []
++
++  func load(request: WebLoadRequest, callback: WebLoadCallback) {
++    DispatchQueue.main.async {
++      let job = HiddenPageJob(request: request, callback: callback)
++      job.onFinish = { [weak self, weak job] in
++        self?.jobs.removeAll { $0 === job }
++      }
++      self.jobs.append(job)
++      job.start()
++    }
++  }
++}
++
++private final class HiddenPageJob: NSObject {
++  var onFinish: (() -> Void)?
++  private let request: WebLoadRequest
++  private let callback: WebLoadCallback
++  private let webView: WKWebView
++  private var finished = false
++  private var polling = false
++  private var deadline = Date()
++
++  init(request: WebLoadRequest, callback: WebLoadCallback) {
++    self.request = request
++    self.callback = callback
++    let config = WKWebViewConfiguration()
++    config.websiteDataStore = WKWebsiteDataStore.default()
++    for script in request.documentStartJs {
++      config.userContentController.addUserScript(
++        WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
++      )
++    }
++    webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
++    webView.customUserAgent = request.userAgent
++    super.init()
++  }
++
++  func start() {
++    // A page that is not in a window is throttled, so it is attached as a nearly invisible 1x1 view.
++    webView.alpha = 0.01
++    webView.isUserInteractionEnabled = false
++    let window = UIApplication.shared.connectedScenes
++      .compactMap { ($0 as? UIWindowScene)?.windows.first { $0.isKeyWindow } }
++      .first
++    window?.addSubview(webView)
++    deadline = Date().addingTimeInterval(Double(request.timeoutMs) / 1000.0)
++    if let url = URL(string: request.url) {
++      webView.load(URLRequest(url: url))
++    }
++    schedulePoll()
++  }
++
++  private func schedulePoll() {
++    let interval = max(Double(request.pollIntervalMs) / 1000.0, 0.1)
++    DispatchQueue.main.asyncAfter(deadline: .now() + interval) { [weak self] in
++      self?.poll()
++    }
++  }
++
++  private func poll() {
++    guard !finished else { return }
++    if Date() > deadline {
++      finish(nil)
++      return
++    }
++    guard !polling else {
++      schedulePoll()
++      return
++    }
++    polling = true
++    evaluate(request.readyCheckJs) { [weak self] ready in
++      guard let self, !self.finished else { return }
++      if ready == "true" {
++        self.evaluate(self.request.extractJs) { result in
++          self.finish(result)
++        }
++      } else {
++        self.polling = false
++        self.schedulePoll()
++      }
++    }
++  }
++
++  /// Runs a script the way an Android `evaluateJavascript` does (the value of its last expression)
++  /// and returns that value as JSON text, or nil when it is undefined or the call stalls.
++  private func evaluate(_ script: String, done: @escaping (String?) -> Void) {
++    guard let data = try? JSONSerialization.data(withJSONObject: [script]),
++          let array = String(data: data, encoding: .utf8) else {
++      done(nil)
++      return
++    }
++    let wrapped = "JSON.stringify((0, eval)(\(array)[0]))"
++    var answered = false
++    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
++      if !answered {
++        answered = true
++        done(nil)
++      }
++    }
++    webView.evaluateJavaScript(wrapped) { value, _ in
++      DispatchQueue.main.async {
++        if answered { return }
++        answered = true
++        done(value as? String)
++      }
++    }
++  }
++
++  private func finish(_ result: String?) {
++    guard !finished else { return }
++    finished = true
++    webView.stopLoading()
++    webView.removeFromSuperview()
++    callback.done(result: result)
++    onFinish?()
++  }
++}
