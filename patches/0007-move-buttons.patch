@@ -1,0 +1,22 @@
+--- a/app/ios/ContentView.swift
++++ b/app/ios/ContentView.swift
+@@ -19,7 +19,7 @@
+   @State private var showingCloud = false
+ 
+   var body: some View {
+-    ZStack(alignment: .topTrailing) {
++    ZStack(alignment: .bottomLeading) {
+       // Compose manages its own insets.
+       ComposeView(incoming: incoming)
+         .ignoresSafeArea()
+@@ -43,8 +43,8 @@
+         }
+         .accessibilityLabel("Open cloud drives")
+       }
+-      .padding(.top, 10)
+-      .padding(.trailing, 12)
++      .padding(.bottom, 84)
++      .padding(.leading, 16)
+     }
+     .sheet(isPresented: $showingCloud) {
+       CloudView(incoming: incoming)
