@@ -51,7 +51,23 @@ import com.yunx.app.data.repository.UCAccountRepository
 import com.yunx.app.data.repository.UCResolveRepository
 import com.yunx.app.data.repository.XunleiAccountRepository
 import com.yunx.app.data.repository.XunleiResolveRepository
+import com.yunx.app.data.network.GitHubApi
+import com.yunx.app.data.network.GitHubLinkParser
+import com.yunx.app.data.network.GitHubLinkType
+import com.yunx.app.data.network.GitHubRelease
+import com.yunx.app.data.network.video.HeadlessWebEngine
+import com.yunx.app.data.network.video.HeadlessWebView
+import com.yunx.app.data.network.video.VideoLinkParser
+import com.yunx.app.data.network.video.VideoMedia
+import com.yunx.app.data.network.video.VideoMediaKind
+import com.yunx.app.data.network.video.VideoParseException
+import com.yunx.app.data.network.video.VideoPlatform
+import com.yunx.app.data.network.video.userMessage
+import com.yunx.app.data.repository.VideoAccountRepository
+import com.yunx.app.data.repository.VideoParseRepository
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resume
 
 /** A cloud drive the service can open shares from. */
 class CloudPlatform internal constructor(
@@ -63,14 +79,21 @@ class CloudPlatform internal constructor(
   val cookieHosts: List<String>,
   /** Cookie names that must all be present for the login to count. */
   val requiredCookies: List<String>,
-  internal val platform: SharePlatform,
+  /** How to sign in: "cookie" (web view), "password" (account + password form), or "none". */
+  val loginKind: String,
+  internal val platform: SharePlatform?,
+  internal val video: VideoPlatform? = null,
 )
 
 class CloudEntry internal constructor(
   val name: String,
   val size: Long,
   val isDirectory: Boolean,
-  internal val file: ShareFile,
+  internal val file: ShareFile?,
+  /** A file that already has its URL: video / image media, or a GitHub release asset. */
+  internal val media: VideoMedia? = null,
+  /** For a GitHub release folder: its tag. */
+  internal val tag: String? = null,
 )
 
 /** An opened share: its root listing plus what is needed to browse and resolve further. */
@@ -78,8 +101,9 @@ class CloudShare internal constructor(
   val platform: CloudPlatform,
   val title: String,
   val entries: List<CloudEntry>,
-  internal val session: ShareSession,
+  internal val session: ShareSession?,
   internal val rootId: String,
+  internal val releases: List<GitHubRelease> = emptyList(),
 )
 
 /** A resolved download: the URL plus the request headers the file host demands. */
@@ -96,11 +120,34 @@ class CloudOpened(val share: CloudShare?, val error: String?)
 /** Outcome of [CloudService.listDirectory]. */
 class CloudListing(val entries: List<CloudEntry>, val error: String?)
 
+/** Outcome of a password / SMS-code sign-in. [needsCode] means a code was sent and is awaited. */
+class CloudLoginResult(val ok: Boolean, val needsCode: Boolean, val message: String?)
+
 /** Outcome of [CloudService.saveLogin]. */
 class CloudSaveResult(val ok: Boolean)
 
 /** Outcome of [CloudService.resolveFile]. */
 class CloudResolved(val link: CloudLink?, val error: String?)
+
+/** Receives the result of a [WebPageLoader] request (null when the page never became ready). */
+interface WebLoadCallback {
+  fun done(result: String?)
+}
+
+class WebLoadRequest(
+  val url: String,
+  val userAgent: String,
+  val readyCheckJs: String,
+  val extractJs: String,
+  val timeoutMs: Long,
+  val pollIntervalMs: Long,
+  val documentStartJs: List<String>,
+)
+
+/** What the host app provides so video sites that render their data in a page can be read. */
+interface WebPageLoader {
+  fun load(request: WebLoadRequest, callback: WebLoadCallback)
+}
 
 /**
  * The entry point the iOS app talks to: open a share link, browse it, and turn a file into a
@@ -134,6 +181,37 @@ class CloudService(context: Context) {
   private val guangyaAccounts = GuangYaAccountRepository(db.guangyaAccountDao(), guangyaApi)
   private val ilanzouAccounts = ILanzouAccountRepository(db.ilanzouAccountDao(), ilanzouApi)
   private val lanzouAccounts = LanzouAccountRepository(db.lanzouAccountDao(), lanzouApi)
+  private val videoAccounts = VideoAccountRepository(db.videoAccountDao())
+  private val videos = VideoParseRepository(videoAccounts)
+  private val github = GitHubApi()
+
+  /** The Xunlei sign-in that is waiting for the SMS code. */
+  private class PendingSms(val mobile: String, val creditKey: String, val token: String)
+  private var pendingXunlei: PendingSms? = null
+
+  /** Lets the video parsers that need a rendered page use the host app's web view. */
+  fun installWebLoader(loader: WebPageLoader) {
+    HeadlessWebView.engine = object : HeadlessWebEngine {
+      override suspend fun loadAndExtract(
+        url: String,
+        userAgent: String,
+        readyCheckJs: String,
+        extractJs: String,
+        timeoutMs: Long,
+        pollIntervalMs: Long,
+        extraDocumentStartJs: List<String>,
+      ): String? = suspendCancellableCoroutine { cont ->
+        loader.load(
+          WebLoadRequest(url, userAgent, readyCheckJs, extractJs, timeoutMs, pollIntervalMs, extraDocumentStartJs),
+          object : WebLoadCallback {
+            override fun done(result: String?) {
+              if (cont.isActive) cont.resume(result)
+            }
+          },
+        )
+      }
+    }
+  }
 
   init {
     guangyaApi.deviceIdProvider = { guangyaAccounts.cachedDeviceId() }
@@ -177,22 +255,33 @@ class CloudService(context: Context) {
   )
 
   private val platformList: List<CloudPlatform> = listOf(
-    CloudPlatform("quark", "夸克网盘", "https://pan.quark.cn/", listOf("quark.cn"), listOf("__pus", "__puus"), SharePlatform.QUARK),
-    CloudPlatform("uc", "UC 网盘", "https://drive.uc.cn/", listOf("uc.cn"), listOf("__pus", "__puus"), SharePlatform.UC),
-    CloudPlatform("baidu", "百度网盘", "https://pan.baidu.com/", listOf("baidu.com"), listOf("BDUSS"), SharePlatform.BAIDU),
-    CloudPlatform("pan115", "115网盘", "https://115.com/", listOf("115.com"), listOf("UID", "SEID"), SharePlatform.PAN115),
-    CloudPlatform("c139", "139 网盘", "https://yun.139.com/", listOf("139.com", "10086.cn"), emptyList(), SharePlatform.C139),
-    CloudPlatform("lanzou", "蓝奏云", null, emptyList(), emptyList(), SharePlatform.LANZOU),
-    CloudPlatform("xunlei", "迅雷网盘", null, emptyList(), emptyList(), SharePlatform.XUNLEI),
-    CloudPlatform("pan123", "123云盘", null, emptyList(), emptyList(), SharePlatform.PAN123),
-    CloudPlatform("guangya", "光鸭云盘", null, emptyList(), emptyList(), SharePlatform.GUANGYA),
-    CloudPlatform("ilanzou", "蓝奏云优享版", null, emptyList(), emptyList(), SharePlatform.ILANZOU),
+    CloudPlatform("quark", "夸克网盘", "https://pan.quark.cn/", listOf("quark.cn"), listOf("__pus", "__puus"), "cookie", SharePlatform.QUARK),
+    CloudPlatform("uc", "UC 网盘", "https://drive.uc.cn/", listOf("uc.cn"), listOf("__pus", "__puus"), "cookie", SharePlatform.UC),
+    CloudPlatform("baidu", "百度网盘", "https://pan.baidu.com/", listOf("baidu.com"), listOf("BDUSS"), "cookie", SharePlatform.BAIDU),
+    CloudPlatform("pan115", "115网盘", "https://115.com/", listOf("115.com"), listOf("UID", "SEID"), "cookie", SharePlatform.PAN115),
+    CloudPlatform("c139", "139 网盘", "https://yun.139.com/", listOf("139.com", "10086.cn"), emptyList(), "cookie", SharePlatform.C139),
+    CloudPlatform("lanzou", "蓝奏云", null, emptyList(), emptyList(), "password", SharePlatform.LANZOU),
+    CloudPlatform("xunlei", "迅雷网盘", null, emptyList(), emptyList(), "password", SharePlatform.XUNLEI),
+    CloudPlatform("pan123", "123云盘", null, emptyList(), emptyList(), "password", SharePlatform.PAN123),
+    CloudPlatform("guangya", "光鸭云盘", null, emptyList(), emptyList(), "password", SharePlatform.GUANGYA),
+    CloudPlatform("ilanzou", "蓝奏云优享版", null, emptyList(), emptyList(), "password", SharePlatform.ILANZOU),
+    CloudPlatform(
+      "bilibili", "哔哩哔哩", VideoPlatform.BILIBILI.loginUrl, listOf("bilibili.com"), listOf("SESSDATA"),
+      "cookie", null, VideoPlatform.BILIBILI,
+    ),
+    CloudPlatform(
+      "xhs", "小红书", VideoPlatform.XHS.loginUrl, listOf("xiaohongshu.com"), listOf("web_session"),
+      "cookie", null, VideoPlatform.XHS,
+    ),
+    CloudPlatform("github", "GitHub", null, emptyList(), emptyList(), "none", null),
   )
 
   fun platforms(): List<CloudPlatform> = platformList
 
   private fun platformFor(platform: SharePlatform): CloudPlatform =
     platformList.first { it.platform == platform }
+
+  private fun platformById(id: String): CloudPlatform = platformList.first { it.id == id }
 
   /** The stored login for [platform]: a cookie, or an access token for 123 / Xunlei. */
   private suspend fun credentialFor(platform: SharePlatform): String? = when (platform) {
@@ -209,7 +298,9 @@ class CloudService(context: Context) {
   }
 
   suspend fun isLoggedIn(platformId: String): Boolean {
-    val platform = platformList.firstOrNull { it.id == platformId }?.platform ?: return false
+    val entry = platformList.firstOrNull { it.id == platformId } ?: return false
+    entry.video?.let { return videoAccounts.activeCookie(it).isNotBlank() }
+    val platform = entry.platform ?: return false
     return !credentialFor(platform).isNullOrBlank()
   }
 
@@ -222,6 +313,8 @@ class CloudService(context: Context) {
     "pan115" -> pan115Accounts.saveCookie(cookie)
     "c139" -> c139Accounts.saveC139Account(cookie)
     "lanzou" -> lanzouAccounts.saveCookie(cookie)
+    "bilibili" -> videoAccounts.save(VideoPlatform.BILIBILI, cookie) != null
+    "xhs" -> videoAccounts.save(VideoPlatform.XHS, cookie) != null
     else -> false
   }
 
@@ -238,8 +331,75 @@ class CloudService(context: Context) {
       "pan123" -> db.pan123AccountDao().clear()
       "guangya" -> db.guangyaAccountDao().clear()
       "ilanzou" -> db.ilanzouAccountDao().clear()
+      "bilibili" -> videoAccounts.removeAll(VideoPlatform.BILIBILI)
+      "xhs" -> videoAccounts.removeAll(VideoPlatform.XHS)
     }
   }
+
+  /**
+   * Account + password sign-in for the drives that have no web sign-in page. Xunlei answers a new
+   * device with an SMS check: the result then has [CloudLoginResult.needsCode] set and
+   * [submitCode] finishes the sign-in.
+   */
+  suspend fun loginWithPassword(platformId: String, account: String, password: String): CloudLoginResult = try {
+    val name = account.trim()
+    if (name.isEmpty() || password.isEmpty()) {
+      CloudLoginResult(false, false, "请输入账号和密码")
+    } else when (platformId) {
+      "pan123" -> {
+        val failure = pan123Accounts.loginWithPassword(name, password)
+        CloudLoginResult(failure == null, false, failure)
+      }
+      "guangya" -> guangyaAccounts.login(name, password).toLoginResult()
+      "ilanzou" -> ilanzouAccounts.login(name, password).toLoginResult()
+      "lanzou" -> lanzouAccounts.login(name, password).toLoginResult()
+      "xunlei" -> {
+        val step = xunleiAccounts.loginWithPassword(name, password)
+        when {
+          step.sessionId.isNotBlank() -> {
+            val ok = xunleiAccounts.finishLogin(step, name)
+            CloudLoginResult(ok, false, if (ok) null else "迅雷登录失败")
+          }
+          step.needSms -> {
+            val sms = xunleiAccounts.sendSms(name)
+            val key = sms.smsCreditKey.ifBlank { step.smsCreditKey }
+            val token = sms.smsToken.ifBlank { step.smsToken }
+            if (key.isBlank() || token.isBlank()) {
+              CloudLoginResult(false, false, sms.message.ifBlank { "验证码发送失败" })
+            } else {
+              pendingXunlei = PendingSms(name, key, token)
+              CloudLoginResult(false, true, "验证码已发送到该手机号")
+            }
+          }
+          else -> CloudLoginResult(false, false, step.message.ifBlank { "迅雷登录失败" })
+        }
+      }
+      else -> CloudLoginResult(false, false, "该平台不支持账号密码登录")
+    }
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudLoginResult(false, false, e.message ?: "登录失败")
+  }
+
+  /** Finishes a sign-in that is waiting for an SMS code. */
+  suspend fun submitCode(platformId: String, code: String): CloudLoginResult = try {
+    val pending = pendingXunlei
+    if (platformId != "xunlei" || pending == null) {
+      CloudLoginResult(false, false, "没有等待验证码的登录")
+    } else {
+      val ok = xunleiAccounts.loginWithSms(pending.mobile, code.trim(), pending.creditKey, pending.token)
+      if (ok) pendingXunlei = null
+      CloudLoginResult(ok, false, if (ok) null else "验证码不正确或已过期")
+    }
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudLoginResult(false, false, e.message ?: "登录失败")
+  }
+
+  private fun <T> Result<T>.toLoginResult(): CloudLoginResult =
+    CloudLoginResult(isSuccess, false, exceptionOrNull()?.message ?: if (isSuccess) null else "登录失败")
 
   private fun rootIdOf(platform: SharePlatform): String = when (platform) {
     SharePlatform.UC -> UCConstants.DEFAULT_PDIR_FID
@@ -251,12 +411,82 @@ class CloudService(context: Context) {
 
   private fun entry(file: ShareFile) = CloudEntry(file.fname, file.fsize, file.isdir, file)
 
+  private fun mediaEntry(media: VideoMedia, fallbackName: String): CloudEntry {
+    val name = media.fileName.ifBlank { fallbackName }
+    val label = if (media.isHls) "$name（HLS 流）" else name
+    return CloudEntry(label, media.size.coerceAtLeast(0L), false, null, media.copy(fileName = name))
+  }
+
+  private suspend fun openVideo(text: String): CloudShare? {
+    val link = VideoLinkParser.parse(text) ?: return null
+    val result = try {
+      videos.parse(link)
+    } catch (e: VideoParseException) {
+      throw IllegalStateException(e.userMessage())
+    }
+    val base = result.title.ifBlank { "video" }.take(80)
+    val entries = ArrayList<CloudEntry>()
+    result.medias.forEachIndexed { index, media ->
+      val ext = when (media.kind) {
+        VideoMediaKind.VIDEO -> if (media.isHls) ".m3u8" else ".mp4"
+        VideoMediaKind.IMAGE -> ".jpg"
+        VideoMediaKind.AUDIO -> ".m4a"
+      }
+      val suffix = if (result.medias.size > 1) "-${index + 1}" else ""
+      entries += mediaEntry(media, "$base$suffix$ext")
+      // Bilibili DASH keeps picture and sound in two streams; each is offered as its own file.
+      if (media.audioUrl.isNotBlank()) {
+        val audio = VideoMedia(
+          url = media.audioUrl,
+          kind = VideoMediaKind.AUDIO,
+          fileName = "$base$suffix.m4a",
+          headers = media.audioHeaders,
+        )
+        entries += mediaEntry(audio, "$base$suffix.m4a")
+      }
+    }
+    if (entries.isEmpty()) throw IllegalStateException(result.notice.ifBlank { "没有找到可下载的内容" })
+    val platform = platformList.firstOrNull { it.video == result.platform } ?: platformById("github")
+    return CloudShare(platform, base, entries, null, "")
+  }
+
+  private suspend fun openGitHub(text: String): CloudShare? {
+    val platform = platformById("github")
+    return when (val parsed = GitHubLinkParser.parse(text)) {
+      null -> null
+      is GitHubLinkType.DirectFile -> {
+        val media = VideoMedia(parsed.url, VideoMediaKind.VIDEO, parsed.fileName)
+        CloudShare(platform, parsed.fileName, listOf(mediaEntry(media, parsed.fileName)), null, "")
+      }
+      is GitHubLinkType.Account -> throw IllegalArgumentException("请粘贴具体仓库的链接")
+      is GitHubLinkType.Repository -> {
+        val releases = github.getReleases(parsed.owner, parsed.repo)
+          ?: throw IllegalStateException("读取 GitHub Release 失败（可能被限流，稍后再试）")
+        val visible = releases.filter { !it.draft && it.assets.isNotEmpty() }
+        if (visible.isEmpty()) throw IllegalStateException("这个仓库没有可下载的 Release 文件")
+        CloudShare(
+          platform,
+          "${parsed.owner}/${parsed.repo}",
+          visible.map {
+            val title = it.name?.takeIf { n -> n.isNotBlank() } ?: it.tagName
+            CloudEntry(title, 0L, true, null, null, it.tagName)
+          },
+          null,
+          "",
+          visible,
+        )
+      }
+    }
+  }
+
   /**
    * Opens a share from pasted text: a link, a whole share message, or a Xunlei / Quark / UC
-   * command. Throws with a readable message when the text is not a supported share.
+   * command; also a video link or a GitHub repository. Throws with a readable message when the
+   * text is not a supported share.
    */
   @Throws(Exception::class, CancellationException::class)
   suspend fun open(text: String, password: String? = null): CloudShare {
+    openVideo(text)?.let { return it }
     var link = text
     if (ShareLinkParser.parse(link) == null) {
       if (XunleiKouling.looksLikeKouling(text)) {
@@ -266,7 +496,8 @@ class CloudService(context: Context) {
         StarSeaApi.resolveToShareLink(text).onSuccess { link = it }
       }
     }
-    val parsed = ShareLinkParser.parse(link) ?: throw IllegalArgumentException("无法识别分享链接")
+    val parsed = ShareLinkParser.parse(link)
+      ?: return openGitHub(text) ?: throw IllegalArgumentException("无法识别分享链接")
     val repo = resolvers[parsed.platform]
       ?: throw IllegalArgumentException("暂不支持 ${parsed.platform.displayName}")
     val credential = credentialFor(parsed.platform).orEmpty()
@@ -278,25 +509,41 @@ class CloudService(context: Context) {
 
   @Throws(Exception::class, CancellationException::class)
   suspend fun list(share: CloudShare, directory: CloudEntry): List<CloudEntry> {
-    val repo = resolvers.getValue(share.platform.platform)
-    val credential = credentialFor(share.platform.platform).orEmpty()
-    return repo.listFiles(share.session, directory.file.fid, credential).getOrThrow().map(::entry)
+    val session = share.session
+    if (session == null) {
+      val release = share.releases.firstOrNull { it.tagName == directory.tag }
+        ?: throw IllegalStateException("找不到这个版本")
+      return release.assets.map {
+        mediaEntry(VideoMedia(it.downloadUrl, VideoMediaKind.VIDEO, it.name, it.size), it.name)
+      }
+    }
+    val platform = share.platform.platform ?: throw IllegalStateException("不是网盘分享")
+    val repo = resolvers.getValue(platform)
+    val credential = credentialFor(platform).orEmpty()
+    val folder = directory.file ?: throw IllegalStateException("不是文件夹")
+    return repo.listFiles(session, folder.fid, credential).getOrThrow().map(::entry)
   }
 
   /** Turns a file into a direct link plus the headers (cookie, referer, user agent) it needs. */
   @Throws(Exception::class, CancellationException::class)
   suspend fun resolve(share: CloudShare, file: CloudEntry): CloudLink {
-    val platform = share.platform.platform
+    file.media?.let { media ->
+      if (media.isHls) throw IllegalStateException("这是 HLS 分段流，Ketch 暂时无法直接下载")
+      return CloudLink(media.url, media.fileName, media.size.coerceAtLeast(0L), media.headers)
+    }
+    val platform = share.platform.platform ?: throw IllegalStateException("无法下载这个条目")
+    val session = share.session ?: throw IllegalStateException("分享已失效，请重新打开")
+    val shareFile = file.file ?: throw IllegalStateException("不是文件")
     val repo = resolvers.getValue(platform)
     val credential = credentialFor(platform).orEmpty()
     if (credential.isBlank() && platform != SharePlatform.LANZOU) {
       throw IllegalStateException("下载需要先登录${share.platform.name}")
     }
     val link: DownloadLink = if (platform == SharePlatform.QUARK) {
-      repo.getShareDownloadLinkWithoutSave(share.session, file.file, credential).getOrNull()
-        ?: repo.getShareDownloadLink(share.session, file.file, credential).getOrThrow()
+      repo.getShareDownloadLinkWithoutSave(session, shareFile, credential).getOrNull()
+        ?: repo.getShareDownloadLink(session, shareFile, credential).getOrThrow()
     } else {
-      repo.getShareDownloadLink(share.session, file.file, credential).getOrThrow()
+      repo.getShareDownloadLink(session, shareFile, credential).getOrThrow()
     }
     val effective = when (platform) {
       SharePlatform.QUARK -> quarkAccounts.refreshIfPrimary(credential)
