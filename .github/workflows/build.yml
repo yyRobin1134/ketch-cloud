@@ -67,8 +67,11 @@ jobs:
       - name: Apply UC patch
         working-directory: ketch
         run: |
-          git apply --check ../ours/patches/ketch-uc-browser.patch
-          git apply ../ours/patches/ketch-uc-browser.patch
+          for p in ../ours/patches/*.patch; do
+            echo "applying $p"
+            git apply --check "$p"
+            git apply "$p"
+          done
           # A distinct bundle id so this build installs next to upstream Ketch.
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app;/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app.uc;/' app/ios/Ketch.xcodeproj/project.pbxproj
           grep -n PRODUCT_BUNDLE_IDENTIFIER app/ios/Ketch.xcodeproj/project.pbxproj

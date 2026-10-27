@@ -1,0 +1,118 @@
+diff --git a/app/ios/UCBrowserView.swift b/app/ios/UCBrowserView.swift
+index 482c344..cf5d7b4 100644
+--- a/app/ios/UCBrowserView.swift
++++ b/app/ios/UCBrowserView.swift
+@@ -49,11 +49,18 @@ struct UCBrowserView: View {
+           Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
+           Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }
+           Spacer()
++          Button { browser.confirmLogout = true } label: { Image(systemName: "rectangle.portrait.and.arrow.right") }
+           Button { browser.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
+         }
+       }
+     }
+     .navigationViewStyle(.stack)
++    .alert("Sign out of UC?", isPresented: $browser.confirmLogout) {
++      Button("Sign out", role: .destructive) { browser.logout() }
++      Button("Cancel", role: .cancel) {}
++    } message: {
++      Text("Clears the UC login stored inside Ketch. Saved Ketch downloads keep their own headers.")
++    }
+   }
+ }
+ 
+@@ -68,6 +75,7 @@ private struct UCWebView: UIViewRepresentable {
+ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
+   @Published var address = "https://drive.uc.cn/"
+   @Published var status: String?
++  @Published var confirmLogout = false
+   let webView: WKWebView
+   private let incoming: IncomingDownloads
+ 
+@@ -109,17 +117,23 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+   }
+ 
+   private func queue(url: URL, from page: URL?) {
+-    // Only allow UC HTTPS destinations. Never send this session's credentials to a third party.
+-    guard url.scheme?.lowercased() == "https", ucHost(url.host) else {
+-      status = "Only UC HTTPS download URLs can use UC login in this version."
++    guard url.scheme?.lowercased() == "https", url.host != nil else {
++      status = "Only HTTPS download URLs are supported."
+       return
+     }
+-    let referer = page?.absoluteString ?? "https://drive.uc.cn/"
++    // UC download links often redirect to storage hosts outside uc.cn. Those still need the UC
++    // referer, but the session cookies are only ever sent to uc.cn hosts.
++    let toUC = ucHost(url.host)
++    let referer = (ucHost(page?.host) ? page?.absoluteString : nil) ?? "https://drive.uc.cn/"
+     webView.evaluateJavaScript("navigator.userAgent") { [weak self] agent, _ in
+       guard let self else { return }
+       let userAgent = agent as? String ?? ""
+       self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+-        let applicable = cookies.filter { Self.applies($0, to: url) }
++        if !Self.hasUCSession(cookies) && toUC {
++          self.status = "UC login missing or expired. Sign in at drive.uc.cn again."
++          return
++        }
++        let applicable = toUC ? cookies.filter { Self.applies($0, to: url) } : []
+         let cookieHeader = applicable.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+         self.incoming.offerBrowserDownload(
+           url: url.absoluteString,
+@@ -132,6 +146,27 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+     }
+   }
+ 
++  /// A usable UC login carries both __pus and __puus.
++  private static func hasUCSession(_ cookies: [HTTPCookie]) -> Bool {
++    let live = cookies.filter {
++      $0.domain.lowercased().hasSuffix("uc.cn") && ($0.expiresDate.map { $0 > Date() } ?? true)
++    }
++    return live.contains { $0.name == "__pus" } && live.contains { $0.name == "__puus" }
++  }
++
++  func logout() {
++    let store = WKWebsiteDataStore.default()
++    store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { records in
++      let ucRecords = records.filter { $0.displayName.lowercased().hasSuffix("uc.cn") }
++      store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: ucRecords) {
++        Task { @MainActor in
++          self.status = "Signed out of UC."
++          self.webView.load(URLRequest(url: URL(string: "https://drive.uc.cn/")!))
++        }
++      }
++    }
++  }
++
+   private static func applies(_ cookie: HTTPCookie, to url: URL) -> Bool {
+     guard let host = url.host?.lowercased() else { return false }
+     let domain = cookie.domain.lowercased()
+@@ -171,7 +206,7 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+           let response = navigationResponse.response as? HTTPURLResponse,
+           (200...299).contains(response.statusCode),
+           let url = response.url,
+-          ucHost(url.host) else {
++          ucHost(url.host) || ucHost(webView.url?.host) else {
+       decisionHandler(.allow)
+       return
+     }
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+index 6d65eea..331f738 100644
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+@@ -190,13 +190,14 @@ class IncomingDownloads {
+     val match = Regex("^https://([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)", RegexOption.IGNORE_CASE)
+       .find(trimmed) ?: return
+     val host = match.groupValues[1].lowercase()
+-    if (host != "uc.cn" && !host.endsWith(".uc.cn")) return
++    // Storage hosts behind UC links are outside uc.cn; only uc.cn hosts may receive the cookie.
++    val isUc = host == "uc.cn" || host.endsWith(".uc.cn")
+     fun header(value: String) = value.trim().takeIf { text ->
+       text.isNotBlank() && text.none { it == '\r' || it == '\n' || it == '\u0000' }
+     }
+     val headers = buildMap {
+       header(referer)?.takeIf { it.startsWith("https://") }?.let { put("Referer", it) }
+-      header(cookieHeader)?.let { put("Cookie", it) }
++      if (isUc) header(cookieHeader)?.let { put("Cookie", it) }
+       header(userAgent)?.let { put("User-Agent", it) }
+     }
+     offer(IncomingDownload.Links(listOf(trimmed), LinkSource.Share, headers))
