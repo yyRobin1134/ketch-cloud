@@ -69,7 +69,7 @@ class Pan123Api(
     private fun crc32Hex(s: String): String {
         val crc = CRC32()
         crc.update(s.encodeToByteArray())
-        return java.lang.Long.toHexString(crc.value and 0xFFFFFFFFL)
+        return (crc.value and 0xFFFFFFFFL).toString(16)
     }
 
     /**

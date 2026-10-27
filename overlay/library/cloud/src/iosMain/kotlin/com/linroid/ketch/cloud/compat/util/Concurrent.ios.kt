@@ -2,22 +2,27 @@ package com.linroid.ketch.cloud.compat.util
 
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSDate
+import platform.Foundation.NSLock
 import platform.Foundation.NSRecursiveLock
 import platform.Foundation.timeIntervalSince1970
 import platform.posix.usleep
 import kotlin.time.TimeSource
 
-// One recursive lock for everything: the guarded sections are tiny cache reads and writes.
-private val globalLock = NSRecursiveLock()
+private val registryLock = NSLock()
+private val locks = HashMap<Any, NSRecursiveLock>()
 
-actual fun <T> syncLock(lock: Any, block: () -> T): T {
-  globalLock.lock()
+private fun lockFor(owner: Any): NSRecursiveLock {
+  registryLock.lock()
   try {
-    return block()
+    return locks.getOrPut(owner) { NSRecursiveLock() }
   } finally {
-    globalLock.unlock()
+    registryLock.unlock()
   }
 }
+
+actual fun lockEnter(lock: Any) = lockFor(lock).lock()
+
+actual fun lockExit(lock: Any) = lockFor(lock).unlock()
 
 actual fun currentTimeMillis(): Long = (NSDate().timeIntervalSince1970 * 1000.0).toLong()
 

@@ -20,6 +20,7 @@ package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.syncLock
 import com.linroid.ketch.cloud.compat.util.format
+import com.linroid.ketch.cloud.compat.util.toByteArray
 import kotlin.concurrent.Volatile
 
 import com.linroid.ketch.cloud.compat.util.Context
@@ -107,10 +108,10 @@ object XunleiDeviceFingerprint {
     }
 
     private fun sha1Hex(input: String): String =
-        MessageDigest.getInstance("SHA-1").digest(input.encodeToByteArray())
+        MessageDigest.getInstance("SHA-1").digest(input.toByteArray())
             .joinToString("") { "%02x".format(it) }
 
     private fun md5Hex(input: String): String =
-        MessageDigest.getInstance("MD5").digest(input.encodeToByteArray())
+        MessageDigest.getInstance("MD5").digest(input.toByteArray())
             .joinToString("") { "%02x".format(it) }
 }

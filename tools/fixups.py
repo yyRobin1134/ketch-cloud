@@ -16,6 +16,18 @@ FIXUPS = {
         ("import java.util.zip.GZIPInputStream\n", ""),
         ("d = GZIPInputStream(ByteArrayInputStream(d)).use { it.readBytes() }", "d = gunzip(d)"),
     ],
+    "data/network/LanzouApi.kt": [
+        ("val u = String(q)", "val u = q.concatToString()"),
+    ],
+    "data/network/Pan123Api.kt": [
+        ("java.lang.Long.toHexString(crc.value and 0xFFFFFFFFL)", "(crc.value and 0xFFFFFFFFL).toString(16)"),
+    ],
+    "data/network/XunleiApi.kt": [
+        (
+            r"re:String\(\s*(com\.linroid\.ketch\.cloud\.compat\.util\.AndroidBase64\.decode\([^()]*\))\s*\)",
+            r"\1.decodeToString()",
+        ),
+    ],
     # The Android WebView helpers; the iOS login screen lives in Swift.
     "data/network/XunleiWebCredential.kt": [
         ("__remove_fun__", "applyDesktopClientHints"),

@@ -82,7 +82,7 @@ object VideoHttp {
         val client = clientProvider().newBuilder().followRedirects(followRedirects).build()
         val response: Response = try {
             client.newCall(builder.build()).execute()
-        } catch (e: java.io.IOException) {
+        } catch (e: com.linroid.ketch.cloud.compat.http.IOException) {
             throw VideoParseException(VideoParseErrorKind.NETWORK, "请求失败：$url", e)
         }
         response.use {
@@ -192,7 +192,7 @@ object VideoHttp {
      * - [stopAt] 传结束标记（一般 `</script>`）。
      */
     fun extractInlineJson(html: String, key: String, stopAt: String = "</script>"): String? {
-        val pattern = Regex(Regex.escape(key) + """\s*=\s*(.*?)""" + Regex.escape(stopAt), RegexOption.DOT_MATCHES_ALL)
+        val pattern = Regex("(?s)" + (Regex.escape(key) + """\s*=\s*(.*?)""" + Regex.escape(stopAt)))
         return pattern.find(html)?.groupValues?.getOrNull(1)?.trim()
     }
 

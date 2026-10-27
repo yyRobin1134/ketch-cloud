@@ -19,6 +19,7 @@
 package com.yunx.app.util
 
 import com.linroid.ketch.cloud.compat.util.Log
+import kotlin.concurrent.Volatile
 
 /**
  * Port of YunX's `DiagnosticLog` for the Ketch cloud module. The original writes rotating log

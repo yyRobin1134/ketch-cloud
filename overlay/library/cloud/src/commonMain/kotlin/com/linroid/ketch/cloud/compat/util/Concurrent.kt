@@ -2,8 +2,23 @@ package com.linroid.ketch.cloud.compat.util
 
 import kotlin.random.Random
 
-/** `synchronized(lock) { }` for common code; the YunX sources are rewritten to call this. */
-expect fun <T> syncLock(lock: Any, block: () -> T): T
+/**
+ * `synchronized(lock) { }` for common code; the YunX sources are rewritten to call this. It is
+ * inline so `return` inside the block still returns from the caller, as with the stdlib version.
+ */
+inline fun <T> syncLock(lock: Any, block: () -> T): T {
+  lockEnter(lock)
+  try {
+    return block()
+  } finally {
+    lockExit(lock)
+  }
+}
+
+/** Takes the re-entrant lock tied to [lock]; pair every call with [lockExit]. */
+expect fun lockEnter(lock: Any)
+
+expect fun lockExit(lock: Any)
 
 /** `System.currentTimeMillis()`. */
 expect fun currentTimeMillis(): Long
@@ -30,7 +45,12 @@ class ConcurrentHashMap<K, V> : MutableMap<K, V> {
   override fun clear() = syncLock(lock) { inner.clear() }
 
   fun remove(key: K, value: V): Boolean = syncLock(lock) {
-    if (inner[key] == value && inner.containsKey(key)) { inner.remove(key); true } else false
+    if (inner.containsKey(key) && inner[key] == value) {
+      inner.remove(key)
+      true
+    } else {
+      false
+    }
   }
 
   fun putIfAbsent(key: K, value: V): V? = syncLock(lock) {

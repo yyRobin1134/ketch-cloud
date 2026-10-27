@@ -19,6 +19,7 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.arraycopy
+import com.linroid.ketch.cloud.compat.util.toByteArray
 
 import com.linroid.ketch.cloud.compat.util.AndroidBase64 as Base64
 import com.linroid.ketch.cloud.compat.util.BigInteger
@@ -163,7 +164,7 @@ internal object Pan115Crypto {
             out.write(toFixedLength(BigInteger(1, block).modPow(EXPONENT, MODULUS)))
             offset += size
         }
-        return out.encodeToByteArray()
+        return out.toByteArray()
     }
 
     /** RSA 分块「解密」：服务端用私钥加密，这里用公钥指数还原（参考实现的 rsaDecrypt） */
@@ -186,12 +187,12 @@ internal object Pan115Crypto {
             out.write(plain, start, plain.size - start)
             offset += size
         }
-        return out.encodeToByteArray()
+        return out.toByteArray()
     }
 
     /** BigInteger → 固定 [RSA_BLOCK] 字节大端表示（左补 0） */
     private fun toFixedLength(value: BigInteger): ByteArray {
-        val raw = value.encodeToByteArray()
+        val raw = value.toByteArray()
         if (raw.size == RSA_BLOCK) return raw
         val out = ByteArray(RSA_BLOCK)
         if (raw.size > RSA_BLOCK) {

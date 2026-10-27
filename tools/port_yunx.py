@@ -63,7 +63,8 @@ BODY_MAP = [
     (r"\bSystem\.arraycopy\(", "arraycopy("),
     (r"\bThread\.sleep\(", "sleepBlocking("),
     (r"\.toByteArray\((?:Charsets|StandardCharsets)\.UTF_8\)", ".encodeToByteArray()"),
-    (r"\.toByteArray\(\)", ".encodeToByteArray()"),
+    (r"\bjava\.net\.URLDecoder\b", f"{COMPAT}.util.URLDecoder"),
+    (r"\bjava\.io\.IOException\b", f"{COMPAT}.http.IOException"),
 ]
 # Names the rewrites above introduce; each gets an import when the file uses it.
 AUTO_IMPORTS = {
@@ -75,12 +76,19 @@ AUTO_IMPORTS = {
     ".format(": "format",
     "gunzip(": "gunzip",
     "arraycopy(": "arraycopy",
+    ".toByteArray(": "toByteArray",
 }
 # Files ported by hand because they use platform APIs; the script never overwrites them.
 MANUAL = {
     "data/network/HttpClients.kt",
+    "data/network/video/HeadlessWebView.kt",
+    "data/security/CredentialCipher.kt",
     "util/DiagnosticLog.kt",
     "util/LogRedactor.kt",
+}
+# Not ported at all: OkHttp interceptors have no counterpart in the compat client.
+SKIP = {
+    "data/network/DiagnosticNetworkInterceptor.kt",
 }
 # Imports the common source set needs that the Android original got implicitly.
 EXTRA_IMPORTS = {
@@ -123,6 +131,39 @@ def rewrite_string_constructor(text: str) -> str:
     return "".join(out)
 
 
+def rewrite_dot_all(text: str) -> str:
+    """`Regex(p, RegexOption.DOT_MATCHES_ALL)` -> `Regex("(?s)" + (p))`; the option is JVM-only."""
+    marker = "Regex("
+    out = []
+    i = 0
+    while True:
+        j = text.find(marker, i)
+        if j < 0:
+            out.append(text[i:])
+            break
+        depth = 1
+        k = j + len(marker)
+        in_raw = False
+        while k < len(text) and depth:
+            if text.startswith('"""', k):
+                in_raw = not in_raw
+                k += 3
+                continue
+            if not in_raw:
+                depth += {"(": 1, ")": -1}.get(text[k], 0)
+            k += 1
+        inner = text[j + len(marker):k - 1]
+        m = re.search(r",\s*RegexOption\.DOT_MATCHES_ALL\s*$", inner)
+        if depth == 0 and m:
+            out.append(text[i:j])
+            out.append('Regex("(?s)" + (' + inner[:m.start()].rstrip() + "))")
+            i = k
+        else:
+            out.append(text[i:j + len(marker)])
+            i = j + len(marker)
+    return "".join(out)
+
+
 def remove_function(text: str, name: str, rel: str) -> str:
     """Drops `fun name(...) { ... }` together with the KDoc comment right above it."""
     pattern = r"^[ \t]*(?:(?:private|internal|public|suspend|inline)\s+)*fun\s+" + re.escape(name) + r"\b"
@@ -153,9 +194,15 @@ def port(text: str, rel: str) -> str:
     for pattern, repl in BODY_MAP:
         text = re.sub(pattern, repl, text)
     text = rewrite_string_constructor(text)
+    text = rewrite_dot_all(text)
     for old, new in FIXUPS.get(rel, []):
         if old == "__remove_fun__":
             text = remove_function(text, new, rel)
+            continue
+        if old.startswith("re:"):
+            text, count = re.subn(old[3:], new, text, flags=re.S)
+            if not count:
+                print(f"  !! regex fixup not applied in {rel}: {old[:60]!r}")
             continue
         if old not in text:
             print(f"  !! fixup not applied in {rel}: {old[:60]!r}")
@@ -188,7 +235,7 @@ def main() -> None:
     app_root = src_root / "com" / "yunx" / "app"
     chosen = [
         p for p in sorted(app_root.rglob("*.kt"))
-        if p.relative_to(app_root).as_posix() not in MANUAL
+        if p.relative_to(app_root).as_posix() not in MANUAL | SKIP
         and any(fnmatch.fnmatch(p.relative_to(app_root).as_posix(), g) for g in globs)
     ]
     for path in chosen:

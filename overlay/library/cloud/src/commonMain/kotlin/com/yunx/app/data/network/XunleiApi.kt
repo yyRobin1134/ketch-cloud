@@ -21,6 +21,7 @@ package com.yunx.app.data.network
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
 import com.linroid.ketch.cloud.compat.util.IO
 import com.linroid.ketch.cloud.compat.util.format
+import com.linroid.ketch.cloud.compat.util.toByteArray
 import kotlin.concurrent.Volatile
 
 import com.yunx.app.data.network.model.DownloadLink
@@ -394,18 +395,14 @@ class XunleiApi(
     /** 解析 JWT 的 exp（秒）；解析失败返回 0 */
     fun jwtExp(token: String): Long = runCatching {
         val payload = token.split(".").getOrNull(1) ?: return@runCatching 0L
-        val json = String(
-            com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING)
-        )
+        val json = com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING).decodeToString()
         JSONObject(json).optLong("exp")
     }.getOrDefault(0L)
 
     /** 从 JWT 中解析 sub（用户 ID） */
     private fun jwtSub(token: String): String = runCatching {
         val payload = token.split(".").getOrNull(1) ?: return@runCatching ""
-        val json = String(
-            com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING)
-        )
+        val json = com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING).decodeToString()
         JSONObject(json).optString("sub")
     }.getOrDefault("")
 
@@ -1119,7 +1116,7 @@ class XunleiApi(
     }
 
     private fun md5Hex(input: String): String {
-        val digest = MessageDigest.getInstance("MD5").digest(input.encodeToByteArray())
+        val digest = MessageDigest.getInstance("MD5").digest(input.toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
     }
 
@@ -1168,7 +1165,7 @@ class XunleiApi(
                 q.split('&').forEach { pair ->
                     val parts = pair.split('=', limit = 2)
                     if (parts.size == 2) {
-                        map[parts[0]] = java.net.URLDecoder.decode(parts[1], "UTF-8")
+                        map[parts[0]] = com.linroid.ketch.cloud.compat.util.URLDecoder.decode(parts[1], "UTF-8")
                     } else if (parts.size == 1 && parts[0].isNotBlank()) {
                         map[parts[0]] = ""
                     }

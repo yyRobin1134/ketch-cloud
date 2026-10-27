@@ -229,7 +229,7 @@ class LanzouApi(
                 if (pos[z] == x + 1) q[z] = arg1[x]
             }
         }
-        val u = String(q)
+        val u = q.concatToString()
         return buildString {
             var i = 0
             while (i + 2 <= u.length && i + 2 <= mask.length) {
@@ -658,7 +658,7 @@ class LanzouApi(
     private fun submitVerify(nodeUrl: String, html: String, shareOrigin: String): String? {
         val uri = runCatching { URI(nodeUrl) }.getOrNull() ?: return null
         // 新版确认页：data : { 'file':'<base64>','el':el,'sign':'<base64>' }
-        val dataMatch = Regex("""data\s*:\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}""", RegexOption.DOT_MATCHES_ALL)
+        val dataMatch = Regex("(?s)" + ("""data\s*:\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}"""))
             .findAll(html)
             .map { it.groupValues[1] }
             .firstOrNull { it.contains("'file'") || it.contains("\"file\"") }

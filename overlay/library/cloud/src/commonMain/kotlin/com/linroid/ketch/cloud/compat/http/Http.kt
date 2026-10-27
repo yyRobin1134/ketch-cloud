@@ -307,6 +307,24 @@ class Cookie(
 ) {
   override fun toString(): String = "$name=$value"
 
+  class Builder {
+    private var name = ""
+    private var value = ""
+    private var domain = ""
+    private var path = "/"
+    private var secure = false
+    private var httpOnly = false
+
+    fun name(value: String) = apply { name = value }
+    fun value(value: String) = apply { this.value = value }
+    fun domain(value: String) = apply { domain = value.trimStart('.') }
+    fun hostOnlyDomain(value: String) = apply { domain = value }
+    fun path(value: String) = apply { path = value }
+    fun secure() = apply { secure = true }
+    fun httpOnly() = apply { httpOnly = true }
+    fun build(): Cookie = Cookie(name, value, Long.MAX_VALUE, domain, path, secure, httpOnly, false)
+  }
+
   companion object {
     /** Parses one `Set-Cookie` header received from [url]; returns null when it is malformed. */
     fun parse(url: HttpUrl, setCookie: String): Cookie? {

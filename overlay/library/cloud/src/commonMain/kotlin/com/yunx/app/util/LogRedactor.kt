@@ -31,7 +31,7 @@ object LogRedactor {
     val raw = value?.toString()?.takeIf { it.isNotBlank() } ?: return "<none>"
     val url = HttpUrl.parse(raw) ?: return if (raw.contains("://")) "<invalid-url>" else "<relative-url>"
     val defaultPort = (url.scheme == "https" && url.port == 443) || (url.scheme == "http" && url.port == 80)
-    val explicitPort = Regex(":(\d+)(?:/|\$)").containsMatchIn(raw.substringAfter("://").substringBefore('/'))
+    val explicitPort = Regex(""":(\d+)(?:/|$)""").containsMatchIn(raw.substringAfter("://").substringBefore('/'))
     val port = if (explicitPort && !defaultPort) ":${url.port}" else ""
     return "${url.scheme}://${url.host.lowercase()}$port"
   }

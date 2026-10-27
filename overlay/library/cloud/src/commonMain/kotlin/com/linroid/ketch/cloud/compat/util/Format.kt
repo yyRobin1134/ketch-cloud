@@ -119,3 +119,6 @@ private fun fixed(value: Double, places: Int): String {
 
 /** `String.format(pattern, args)`, the static form. */
 fun String.Companion.format(format: String, vararg args: Any?): String = format.format(*args)
+
+/** `String.toByteArray()`: UTF-8 bytes, as on the JVM. */
+fun String.toByteArray(): ByteArray = encodeToByteArray()
