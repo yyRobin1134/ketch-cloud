@@ -29,6 +29,10 @@ class ConcurrentHashMap<K, V> : MutableMap<K, V> {
   override fun putAll(from: Map<out K, V>) = syncLock(lock) { inner.putAll(from) }
   override fun clear() = syncLock(lock) { inner.clear() }
 
+  fun remove(key: K, value: V): Boolean = syncLock(lock) {
+    if (inner[key] == value && inner.containsKey(key)) { inner.remove(key); true } else false
+  }
+
   fun putIfAbsent(key: K, value: V): V? = syncLock(lock) {
     inner[key] ?: run { inner[key] = value; null }
   }

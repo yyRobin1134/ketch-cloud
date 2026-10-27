@@ -19,6 +19,8 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.IO
+import com.linroid.ketch.cloud.compat.util.format
+import com.linroid.ketch.cloud.compat.util.gunzip
 
 import com.linroid.ketch.cloud.compat.util.AndroidBase64 as Base64
 import com.yunx.app.data.network.model.DownloadLink
@@ -37,14 +39,12 @@ import com.linroid.ketch.cloud.compat.json.JSONObject
 import com.linroid.ketch.cloud.compat.util.URLEncoder
 import com.linroid.ketch.cloud.compat.crypto.MessageDigest
 import com.linroid.ketch.cloud.compat.util.SecureRandom
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.linroid.ketch.cloud.compat.util.SimpleDateFormat
+import com.linroid.ketch.cloud.compat.util.Date
+import com.linroid.ketch.cloud.compat.util.Locale
 import com.linroid.ketch.cloud.compat.crypto.Cipher
 import com.linroid.ketch.cloud.compat.crypto.IvParameterSpec
 import com.linroid.ketch.cloud.compat.crypto.SecretKeySpec
-import java.io.ByteArrayInputStream
-import java.util.zip.GZIPInputStream
 
 /**
  * 139 网盘 API 封装（OkHttp）。
@@ -64,13 +64,13 @@ class C139Api(
     private val jsonMediaType = "application/json;charset=UTF-8".toMediaType()
 
     private val shareAesKey: SecretKeySpec =
-        SecretKeySpec(C139Constants.SHARE_AES_KEY.toByteArray(Charsets.UTF_8), "AES")
+        SecretKeySpec(C139Constants.SHARE_AES_KEY.encodeToByteArray(), "AES")
 
     // ---------- mcloud-sign 签名（§4） ----------
 
     private fun md5(s: String): String {
         val digest = MessageDigest.getInstance("MD5")
-        return digest.digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        return digest.digest(s.encodeToByteArray()).joinToString("") { "%02x".format(it) }
     }
 
     /** §4.1：encodeURIComponent（+→%20，并还原 ! ' ( ) *） */
@@ -91,7 +91,7 @@ class C139Api(
     fun calSign(bodyJson: String, ts: String, rand: String): String {
         val encoded = encodeURIComponent(bodyJson)
         val sorted = encoded.toCharArray().sorted().joinToString("")
-        val b64 = Base64.encodeToString(sorted.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        val b64 = Base64.encodeToString(sorted.encodeToByteArray(), Base64.NO_WRAP)
         val res = md5(b64) + md5("$ts:$rand")
         return md5(res).uppercase()
     }
@@ -112,7 +112,7 @@ class C139Api(
      */
     fun accountFromAuthorization(authorization: String): String? = runCatching {
         val b64 = authorization.removePrefix("Basic").trim()
-        val decoded = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+        val decoded = (Base64.decode(b64, Base64.DEFAULT)).decodeToString()
         decoded.split(":").getOrNull(1)?.takeIf { it.isNotBlank() }
     }.getOrNull()
 
@@ -123,7 +123,7 @@ class C139Api(
         val iv = ByteArray(16).also { SecureRandom().nextBytes(it) }
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, shareAesKey, IvParameterSpec(iv))
-        val ct = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+        val ct = cipher.doFinal(plaintext.encodeToByteArray())
         return Base64.encodeToString(iv + ct, Base64.NO_WRAP)
     }
 
@@ -137,9 +137,9 @@ class C139Api(
         var d = cipher.doFinal(ct)  // PKCS5Padding 自动去填充
         // alist YunCrypto 同款：解密后若为 gzip 则解压（首 2 字节 0x1f 0x8b）
         if (d.size > 2 && d[0] == 0x1f.toByte() && d[1] == 0x8b.toByte()) {
-            d = GZIPInputStream(ByteArrayInputStream(d)).use { it.readBytes() }
+            d = gunzip(d)
         }
-        return String(d, Charsets.UTF_8)
+        return (d).decodeToString()
     }
 
     // ---------- 分享解析（§15，7.13+ 加密） ----------

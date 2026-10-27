@@ -19,8 +19,8 @@
 package com.yunx.app.data.network.video
 
 import com.yunx.app.data.download.DownloadPathPolicy
-import java.text.SimpleDateFormat
-import java.util.Locale
+import com.linroid.ketch.cloud.compat.util.SimpleDateFormat
+import com.linroid.ketch.cloud.compat.util.Locale
 
 /**
  * Pixiv 插画/漫画解析，产出每页的**原图直链**。

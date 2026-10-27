@@ -256,7 +256,7 @@ class GitHubApi(
     suspend fun getLastCommitDate(owner: String, repo: String, path: String): String? =
         withContext(Dispatchers.IO) {
             runCatching {
-                val url = "https://api.github.com/repos/$owner/$repo/commits?path=${java.net.URLEncoder.encode(path, "UTF-8")}&per_page=1"
+                val url = "https://api.github.com/repos/$owner/$repo/commits?path=${com.linroid.ketch.cloud.compat.util.URLEncoder.encode(path, "UTF-8")}&per_page=1"
                 val arr = requestJsonArray(url) ?: return@runCatching null
                 if (arr.length() == 0) return@runCatching null
                 arr.optJSONObject(0)

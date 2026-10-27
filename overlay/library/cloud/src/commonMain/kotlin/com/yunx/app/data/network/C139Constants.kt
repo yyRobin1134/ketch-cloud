@@ -19,7 +19,6 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.AndroidBase64 as Base64
-import java.nio.charset.StandardCharsets
 
 /**
  * 139 网盘（中国移动·和彩云）登录常量（依据《139网盘解析方法-alist逆向.md》§3.5）。
@@ -233,7 +232,7 @@ object C139Constants {
                 val v = kv2.substringAfter('=')
                 if (v.isNotBlank()) {
                     val decoded = runCatching {
-                        String(Base64.decode(v, Base64.DEFAULT), StandardCharsets.UTF_8)
+                        (Base64.decode(v, Base64.DEFAULT)).decodeToString()
                     }.getOrNull()
                     if (!decoded.isNullOrBlank()) return decoded
                 }
@@ -243,7 +242,7 @@ object C139Constants {
         extractAuthorization(cookie)?.let { auth ->
             val account = runCatching {
                 val b64 = auth.removePrefix("Basic").trim()
-                String(Base64.decode(b64, Base64.DEFAULT), StandardCharsets.UTF_8)
+                (Base64.decode(b64, Base64.DEFAULT)).decodeToString()
                     .split(":").getOrNull(1)
             }.getOrNull()
             if (!account.isNullOrBlank()) return account
@@ -280,7 +279,7 @@ object C139Constants {
                 val v = kv2.substringAfter('=')
                 if (v.isNotBlank()) {
                     return runCatching {
-                        String(Base64.decode(v, Base64.DEFAULT), StandardCharsets.UTF_8)
+                        (Base64.decode(v, Base64.DEFAULT)).decodeToString()
                     }.getOrNull()?.takeIf { it.isNotBlank() } ?: v
                 }
             }

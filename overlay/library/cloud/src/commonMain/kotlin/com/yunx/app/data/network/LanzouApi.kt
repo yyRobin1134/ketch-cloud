@@ -20,6 +20,7 @@ package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.sleepBlocking
 import com.linroid.ketch.cloud.compat.util.IO
+import com.linroid.ketch.cloud.compat.util.format
 
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.ShareFile
@@ -36,7 +37,7 @@ import com.linroid.ketch.cloud.compat.http.OkHttpClient
 import com.linroid.ketch.cloud.compat.http.Request
 import com.linroid.ketch.cloud.compat.json.JSONArray
 import com.linroid.ketch.cloud.compat.json.JSONObject
-import java.net.URI
+import com.linroid.ketch.cloud.compat.util.URI
 
 /** 个人盘登录态参数（文档 §B1）。 */
 data class LanzouLoginParams(val uid: String, val vei: String)
@@ -71,13 +72,13 @@ class LanzouApi(
 
     // 蓝奏可能返回 acw_sc__v2 的 JS 校验页（并下发 down_ip 等 Cookie）：
     // 按 host 记录 Cookie，遇到校验页时本地计算 Cookie 并重放一次（参考实现 wenxi lanzou.dart / lanzou_protocol.dart）。
-    private val cookieJar = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, String>>()
+    private val cookieJar = com.linroid.ketch.cloud.compat.util.ConcurrentHashMap<String, MutableMap<String, String>>()
 
     private fun hostOf(url: String): String = runCatching { URI(url).host }.getOrNull().orEmpty()
 
     private fun setCookie(host: String, name: String, value: String) {
         if (host.isBlank()) return
-        cookieJar.getOrPut(host) { java.util.concurrent.ConcurrentHashMap() }[name] = value
+        cookieJar.getOrPut(host) { com.linroid.ketch.cloud.compat.util.ConcurrentHashMap() }[name] = value
     }
 
     private fun cookieHeader(host: String): String =
@@ -127,14 +128,14 @@ class LanzouApi(
     suspend fun login(account: String, password: String): String = withContext(Dispatchers.IO) {
         val name = account.trim()
         if (name.isEmpty() || password.isEmpty()) throw IllegalStateException("请输入蓝奏云账号和密码")
-        val jar = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, String>>()
+        val jar = com.linroid.ketch.cloud.compat.util.ConcurrentHashMap<String, MutableMap<String, String>>()
         val loginClient = client.newBuilder()
             .followRedirects(true)
             .followSslRedirects(true)
             .cookieJar(object : CookieJar {
                 override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
                     cookies.forEach { c ->
-                        jar.getOrPut(url.host) { java.util.concurrent.ConcurrentHashMap() }[c.name] = c.value
+                        jar.getOrPut(url.host) { com.linroid.ketch.cloud.compat.util.ConcurrentHashMap() }[c.name] = c.value
                     }
                 }
 
@@ -168,7 +169,7 @@ class LanzouApi(
         while (attempt < 4 && body.contains("arg1=") && !body.contains("\"zt\"")) {
             val arg1 = Regex("""arg1\s*=\s*'([0-9A-Fa-f]{40})'""").find(body)?.groupValues?.getOrNull(1)
                 ?: break
-            jar.getOrPut("accounts.woozooo.com") { java.util.concurrent.ConcurrentHashMap() }["acw_sc__v2"] = acwScV2(arg1)
+            jar.getOrPut("accounts.woozooo.com") { com.linroid.ketch.cloud.compat.util.ConcurrentHashMap() }["acw_sc__v2"] = acwScV2(arg1)
             body = postLogin()
             attempt++
         }

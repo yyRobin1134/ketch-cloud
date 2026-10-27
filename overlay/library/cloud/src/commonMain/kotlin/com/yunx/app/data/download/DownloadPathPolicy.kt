@@ -18,7 +18,6 @@
 
 package com.yunx.app.data.download
 
-import java.io.File
 
 /** Pure path validation shared by Android storage backends and unit tests. */
 internal object DownloadPathPolicy {
@@ -43,12 +42,6 @@ internal object DownloadPathPolicy {
         val dirParts = if (nameMissing) parts else parts.dropLast(1)
         val safeDirectory = dirParts.joinToString("/") { sanitizeName(it) }
         return SafePath(safeName, safeDirectory)
-    }
-
-    fun isContained(base: File, candidate: File): Boolean {
-        val basePath = base.canonicalFile.path.trimEnd(File.separatorChar)
-        val candidatePath = candidate.canonicalFile.path
-        return candidatePath != basePath && candidatePath.startsWith(basePath + File.separator)
     }
 
     fun sanitizeName(name: String): String {

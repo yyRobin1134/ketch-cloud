@@ -171,7 +171,7 @@ suspend fun listShare(surl: String, sekey: String, dir: String, cookie: String, 
             }
             checkErrno(json, "获取分享文件列表失败")
         }
-        val array = json.optJSONArray("list") ?: org.json.JSONArray()
+        val array = json.optJSONArray("list") ?: com.linroid.ketch.cloud.compat.json.JSONArray()
         val files = buildList {
             for (i in 0 until array.length()) {
                 val item = array.optJSONObject(i) ?: continue

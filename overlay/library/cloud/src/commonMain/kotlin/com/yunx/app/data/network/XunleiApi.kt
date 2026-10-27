@@ -20,6 +20,7 @@ package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
 import com.linroid.ketch.cloud.compat.util.IO
+import com.linroid.ketch.cloud.compat.util.format
 import kotlin.concurrent.Volatile
 
 import com.yunx.app.data.network.model.DownloadLink
@@ -102,7 +103,7 @@ class XunleiApi(
 
     /** 刷新出的 captcha（按设备号缓存：不同账号的 captcha 不能串用，App 通道与网页通道的
      *  client_id 也不同，串用会直接得到 client_id not match）。带过期时间，过期的不会被再用 */
-    private val refreshedCaptchas = java.util.concurrent.ConcurrentHashMap<String, PanCaptcha>()
+    private val refreshedCaptchas = com.linroid.ketch.cloud.compat.util.ConcurrentHashMap<String, PanCaptcha>()
 
     /** 当前有效 access_token（401 自动刷新后更新；pan 请求优先使用，避免刷新后闭包仍用旧值） */
     @Volatile
@@ -335,7 +336,7 @@ class XunleiApi(
                 val body = "grant_type=refresh_token" +
                     "&client_id=${XunleiConstants.APP_CLIENT_ID}" +
                     "&client_secret=${XunleiConstants.APP_CLIENT_SECRET}" +
-                    "&refresh_token=${java.net.URLEncoder.encode(refreshToken, "UTF-8")}"
+                    "&refresh_token=${com.linroid.ketch.cloud.compat.util.URLEncoder.encode(refreshToken, "UTF-8")}"
                 Request.Builder()
                     .url(XunleiConstants.REFRESH_URL)
                     .header("Content-Type", "application/x-www-form-urlencoded")
@@ -394,7 +395,7 @@ class XunleiApi(
     fun jwtExp(token: String): Long = runCatching {
         val payload = token.split(".").getOrNull(1) ?: return@runCatching 0L
         val json = String(
-            android.util.Base64.decode(payload, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING)
+            com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING)
         )
         JSONObject(json).optLong("exp")
     }.getOrDefault(0L)
@@ -403,7 +404,7 @@ class XunleiApi(
     private fun jwtSub(token: String): String = runCatching {
         val payload = token.split(".").getOrNull(1) ?: return@runCatching ""
         val json = String(
-            android.util.Base64.decode(payload, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING)
+            com.linroid.ketch.cloud.compat.util.AndroidBase64.decode(payload, com.linroid.ketch.cloud.compat.util.AndroidBase64.URL_SAFE or com.linroid.ketch.cloud.compat.util.AndroidBase64.NO_PADDING)
         )
         JSONObject(json).optString("sub")
     }.getOrDefault("")
@@ -467,11 +468,11 @@ class XunleiApi(
         captchaToken: String,
         pageToken: String
     ): Pair<List<ShareFile>, String> = withContext(Dispatchers.IO) {
-        val filters = java.net.URLEncoder.encode("""{"trashed":{"eq":false}}""", "UTF-8")
+        val filters = com.linroid.ketch.cloud.compat.util.URLEncoder.encode("""{"trashed":{"eq":false}}""", "UTF-8")
         val url = buildString {
             append(XunleiConstants.FILES_URL)
             append("?parent_id=").append(parentId)
-            append("&page_token=").append(java.net.URLEncoder.encode(pageToken, "UTF-8"))
+            append("&page_token=").append(com.linroid.ketch.cloud.compat.util.URLEncoder.encode(pageToken, "UTF-8"))
             append("&limit=100&with_audit=true&filters=").append(filters)
         }
         panCall(captchaToken, deviceId, "GET:/drive/v1/files", { t ->
@@ -558,9 +559,9 @@ class XunleiApi(
         val url = buildString {
             append(XunleiConstants.SHARE_URL)
             append("?share_id=").append(shareId)
-            append("&pass_code=").append(java.net.URLEncoder.encode(passCode, "UTF-8"))
+            append("&pass_code=").append(com.linroid.ketch.cloud.compat.util.URLEncoder.encode(passCode, "UTF-8"))
             append("&limit=100&page_token=")
-                .append(java.net.URLEncoder.encode(pageToken, "UTF-8"))
+                .append(com.linroid.ketch.cloud.compat.util.URLEncoder.encode(pageToken, "UTF-8"))
                 .append("&thumbnail_size=SIZE_SMALL")
         }
         val build: (String) -> Request = { t -> panRequest(url, accessToken, deviceId, t) }
@@ -603,9 +604,9 @@ class XunleiApi(
             append(XunleiConstants.SHARE_DETAIL_URL)
             append("?share_id=").append(shareId)
             append("&parent_id=").append(parentId)
-            append("&pass_code_token=").append(java.net.URLEncoder.encode(passCodeToken, "UTF-8"))
+            append("&pass_code_token=").append(com.linroid.ketch.cloud.compat.util.URLEncoder.encode(passCodeToken, "UTF-8"))
             append("&limit=100&page_token=")
-                .append(java.net.URLEncoder.encode(pageToken, "UTF-8"))
+                .append(com.linroid.ketch.cloud.compat.util.URLEncoder.encode(pageToken, "UTF-8"))
                 .append("&thumbnail_size=SIZE_SMALL")
         }
         val build: (String) -> Request = { t -> panRequest(url, accessToken, deviceId, t) }
@@ -1118,7 +1119,7 @@ class XunleiApi(
     }
 
     private fun md5Hex(input: String): String {
-        val digest = MessageDigest.getInstance("MD5").digest(input.toByteArray())
+        val digest = MessageDigest.getInstance("MD5").digest(input.encodeToByteArray())
         return digest.joinToString("") { "%02x".format(it) }
     }
 

@@ -20,6 +20,7 @@ package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
 import com.linroid.ketch.cloud.compat.util.IO
+import com.linroid.ketch.cloud.compat.util.format
 
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.QuotaInfo
@@ -249,7 +250,7 @@ class ILanzouApi(
             if (resp.code in 300..399 && !location.isNullOrBlank()) {
                 // Location 可能是相对路径，按 API 基址解析为绝对地址后返回
                 val resolved = runCatching {
-                    java.net.URI(ILanzouConstants.API_BASE).resolve(location).toString()
+                    com.linroid.ketch.cloud.compat.util.URI(ILanzouConstants.API_BASE).resolve(location).toString()
                 }.getOrDefault(location)
                 return@withContext DownloadLink(
                     fid = ILanzouConstants.FILE_PREFIX + fileId,
@@ -416,7 +417,7 @@ class ILanzouApi(
                 val location = resp.header("Location")
                 if (resp.code in 300..399 && !location.isNullOrBlank()) {
                     val resolved = runCatching {
-                        java.net.URI(ILanzouConstants.SHARE_API_BASE).resolve(location).toString()
+                        com.linroid.ketch.cloud.compat.util.URI(ILanzouConstants.SHARE_API_BASE).resolve(location).toString()
                     }.getOrDefault(location)
                     return@withContext DownloadLink(
                         fid = ILanzouConstants.FILE_PREFIX + fileId,
@@ -590,9 +591,9 @@ class ILanzouApi(
 
     private fun aesHex(plain: String): String {
         val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
-        val key = SecretKeySpec(ILanzouConstants.AES_KEY.toByteArray(Charsets.UTF_8), "AES")
+        val key = SecretKeySpec(ILanzouConstants.AES_KEY.encodeToByteArray(), "AES")
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        val out = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        val out = cipher.doFinal(plain.encodeToByteArray())
         return out.joinToString("") { "%02x".format(it) }
     }
 

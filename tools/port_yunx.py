@@ -1,5 +1,6 @@
 """Copy YunX (CYQawa/YunX, AGPL-3.0) Kotlin sources into the cloud module and rewrite the
-JVM/Android imports the compat layer covers. Anything left over is listed for manual porting.
+JVM/Android APIs the compat layer covers. Per-file edits that cannot be generic live in
+fixups.py so a port can be repeated against a newer YunX checkout.
 
 usage: python port_yunx.py <yunx-checkout> <glob-relative-to-com/yunx/app> [...]
 """
@@ -8,31 +9,61 @@ import pathlib
 import re
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from fixups import FIXUPS  # noqa: E402
+
 COMPAT = "com.linroid.ketch.cloud.compat"
+NL = chr(10)
+
+
+def util(name):
+    return f"import {COMPAT}.util.{name}"
+
+
 IMPORT_MAP = [
     (r"^import org\.json\.", f"import {COMPAT}.json."),
     (r"^import okhttp3\.", f"import {COMPAT}.http."),
-    (r"^import java\.net\.URLEncoder$", f"import {COMPAT}.util.URLEncoder"),
-    (r"^import java\.net\.URLDecoder$", f"import {COMPAT}.util.URLDecoder"),
+    (r"^import java\.net\.URLEncoder$", util("URLEncoder")),
+    (r"^import java\.net\.URLDecoder$", util("URLDecoder")),
+    (r"^import java\.net\.URI$", util("URI")),
     (r"^import java\.security\.MessageDigest$", f"import {COMPAT}.crypto.MessageDigest"),
     (r"^import javax\.crypto\.Cipher$", f"import {COMPAT}.crypto.Cipher"),
     (r"^import javax\.crypto\.spec\.SecretKeySpec$", f"import {COMPAT}.crypto.SecretKeySpec"),
     (r"^import javax\.crypto\.spec\.IvParameterSpec$", f"import {COMPAT}.crypto.IvParameterSpec"),
-    (r"^import android\.util\.Base64$", f"import {COMPAT}.util.AndroidBase64 as Base64"),
-    (r"^import android\.util\.Log$", f"import {COMPAT}.util.Log"),
+    (r"^import android\.util\.Base64$", util("AndroidBase64 as Base64")),
+    (r"^import android\.util\.Log$", util("Log")),
+    (r"^import android\.content\.Context$", util("Context")),
     (r"^import java\.util\.concurrent\.TimeUnit$", f"import {COMPAT}.http.TimeUnit"),
     (r"^import java\.io\.IOException$", f"import {COMPAT}.http.IOException"),
-    (r"^import java\.util\.concurrent\.ConcurrentHashMap$", f"import {COMPAT}.util.ConcurrentHashMap"),
-    (r"^import java\.util\.concurrent\.ThreadLocalRandom$", f"import {COMPAT}.util.ThreadLocalRandom"),
-    (r"^import java\.security\.SecureRandom$", f"import {COMPAT}.util.SecureRandom"),
+    (r"^import java\.util\.concurrent\.ConcurrentHashMap$", util("ConcurrentHashMap")),
+    (r"^import java\.util\.concurrent\.ThreadLocalRandom$", util("ThreadLocalRandom")),
+    (r"^import java\.security\.SecureRandom$", util("SecureRandom")),
+    (r"^import java\.util\.zip\.CRC32$", util("CRC32")),
+    (r"^import java\.text\.SimpleDateFormat$", util("SimpleDateFormat")),
+    (r"^import java\.util\.(Date|Locale|Calendar|TimeZone)$", lambda m: util(m.group(1))),
+    (r"^import java\.math\.BigInteger$", util("BigInteger")),
+    (r"^import java\.io\.ByteArrayOutputStream$", util("ByteArrayOutputStream")),
+    # Charsets are spelled out by the rewrites below; drop the JVM-only import.
+    (r"^import java\.nio\.charset\.StandardCharsets" + NL, ""),
+    # Android WebView APIs have no common equivalent; the files that need them are fixed by hand.
+    (r"^import (?:androidx\.webkit|android\.webkit)\.[\w.]+" + NL, ""),
 ]
 BODY_MAP = [
     (r"\bokhttp3\.", f"{COMPAT}.http."),
+    (r"\borg\.json\.", f"{COMPAT}.json."),
     (r"\bjava\.security\.MessageDigest\b", f"{COMPAT}.crypto.MessageDigest"),
+    (r"\bjava\.util\.concurrent\.ConcurrentHashMap\b", f"{COMPAT}.util.ConcurrentHashMap"),
+    (r"\bjava\.net\.URLEncoder\b", f"{COMPAT}.util.URLEncoder"),
+    (r"\bjava\.net\.URI\b", f"{COMPAT}.util.URI"),
+    (r"\bjava\.io\.ByteArrayOutputStream\b", f"{COMPAT}.util.ByteArrayOutputStream"),
+    (r"\bandroid\.util\.Base64\b", f"{COMPAT}.util.AndroidBase64"),
     (r"\bsynchronized\(", "syncLock("),
     (r"\bSystem\.currentTimeMillis\(\)", "currentTimeMillis()"),
     (r"\bSystem\.nanoTime\(\)", "nanoTime()"),
+    (r"\bSystem\.arraycopy\(", "arraycopy("),
     (r"\bThread\.sleep\(", "sleepBlocking("),
+    (r"\.toByteArray\((?:Charsets|StandardCharsets)\.UTF_8\)", ".encodeToByteArray()"),
+    (r"\.toByteArray\(\)", ".encodeToByteArray()"),
 ]
 # Names the rewrites above introduce; each gets an import when the file uses it.
 AUTO_IMPORTS = {
@@ -41,6 +72,9 @@ AUTO_IMPORTS = {
     "nanoTime()": "nanoTime",
     "sleepBlocking(": "sleepBlocking",
     "Dispatchers.IO": "IO",
+    ".format(": "format",
+    "gunzip(": "gunzip",
+    "arraycopy(": "arraycopy",
 }
 # Files ported by hand because they use platform APIs; the script never overwrites them.
 MANUAL = {
@@ -52,19 +86,84 @@ MANUAL = {
 EXTRA_IMPORTS = {
     "@Volatile": "import kotlin.concurrent.Volatile",
 }
-LEFTOVER = re.compile(r"^import (java|javax|android|androidx|org\.(?!jetbrains)|com\.squareup|net\.)[\w.]*", re.M)
-NL = chr(10)
+LEFTOVER = re.compile(
+    r"^import (java|javax|android|androidx|org\.(?!jetbrains)|com\.squareup|net\.)[\w.]*", re.M
+)
 
 
-def port(text: str) -> str:
+def rewrite_string_constructor(text: str) -> str:
+    """`String(bytes, Charsets.UTF_8)` -> `(bytes).decodeToString()`, matching parentheses."""
+    out = []
+    i = 0
+    marker = "String("
+    while True:
+        j = text.find(marker, i)
+        if j < 0:
+            out.append(text[i:])
+            break
+        # Only the constructor call: not `toString(`, `ByteString(` and the like.
+        if j > 0 and (text[j - 1].isalnum() or text[j - 1] in "_."):
+            out.append(text[i:j + len(marker)])
+            i = j + len(marker)
+            continue
+        depth = 1
+        k = j + len(marker)
+        while k < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[k], 0)
+            k += 1
+        inner = text[j + len(marker):k - 1]
+        m = re.search(r",\s*(?:Charsets|StandardCharsets)\.UTF_8\s*$", inner)
+        if depth == 0 and m:
+            out.append(text[i:j])
+            out.append("(" + inner[:m.start()].rstrip() + ").decodeToString()")
+            i = k
+        else:
+            out.append(text[i:j + len(marker)])
+            i = j + len(marker)
+    return "".join(out)
+
+
+def remove_function(text: str, name: str, rel: str) -> str:
+    """Drops `fun name(...) { ... }` together with the KDoc comment right above it."""
+    pattern = r"^[ \t]*(?:(?:private|internal|public|suspend|inline)\s+)*fun\s+" + re.escape(name) + r"\b"
+    m = re.search(pattern, text, re.M)
+    if not m:
+        print(f"  !! function not found in {rel}: {name}")
+        return text
+    start = m.start()
+    doc = re.search(r"/\*\*(?:(?!\*/).)*\*/[ \t]*" + NL + r"\Z", text[:start], re.S)
+    if doc:
+        start = doc.start()
+    brace = text.find("{", m.end())
+    depth = 0
+    k = brace
+    while k < len(text):
+        depth += {"{": 1, "}": -1}.get(text[k], 0)
+        k += 1
+        if depth == 0:
+            break
+    while k < len(text) and text[k] == NL:
+        k += 1
+    return text[:start] + text[k:]
+
+
+def port(text: str, rel: str) -> str:
     for pattern, repl in IMPORT_MAP:
         text = re.sub(pattern, repl, text, flags=re.M)
     for pattern, repl in BODY_MAP:
         text = re.sub(pattern, repl, text)
+    text = rewrite_string_constructor(text)
+    for old, new in FIXUPS.get(rel, []):
+        if old == "__remove_fun__":
+            text = remove_function(text, new, rel)
+            continue
+        if old not in text:
+            print(f"  !! fixup not applied in {rel}: {old[:60]!r}")
+        text = text.replace(old, new)
     needed = [
-        f"import {COMPAT}.util.{name}"
+        util(name)
         for token, name in AUTO_IMPORTS.items()
-        if token in text and f"import {COMPAT}.util.{name}" not in text
+        if token in text and util(name) not in text
     ]
     needed += [imp for token, imp in EXTRA_IMPORTS.items() if token in text and imp not in text]
     if needed:
@@ -87,15 +186,15 @@ def main() -> None:
     )
     globs = sys.argv[2:]
     app_root = src_root / "com" / "yunx" / "app"
-    all_files = sorted(app_root.rglob("*.kt"))
     chosen = [
-        p for p in all_files
+        p for p in sorted(app_root.rglob("*.kt"))
         if p.relative_to(app_root).as_posix() not in MANUAL
         and any(fnmatch.fnmatch(p.relative_to(app_root).as_posix(), g) for g in globs)
     ]
     for path in chosen:
+        rel_app = path.relative_to(app_root).as_posix()
         rel = path.relative_to(src_root)
-        text = port(path.read_text(encoding="utf-8"))
+        text = port(path.read_text(encoding="utf-8"), rel_app)
         target = out_root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8", newline=NL)

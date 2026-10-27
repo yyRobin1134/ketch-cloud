@@ -20,6 +20,7 @@ package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
 import com.linroid.ketch.cloud.compat.util.IO
+import com.linroid.ketch.cloud.compat.util.format
 
 import com.linroid.ketch.cloud.compat.util.AndroidBase64 as Base64
 import com.yunx.app.data.network.model.DownloadLink
@@ -36,10 +37,10 @@ import com.linroid.ketch.cloud.compat.http.RequestBody.Companion.toRequestBody
 import com.linroid.ketch.cloud.compat.json.JSONArray
 import com.linroid.ketch.cloud.compat.json.JSONObject
 import com.linroid.ketch.cloud.compat.util.URLEncoder
-import java.util.Calendar
-import java.util.TimeZone
+import com.linroid.ketch.cloud.compat.util.Calendar
+import com.linroid.ketch.cloud.compat.util.TimeZone
 import com.linroid.ketch.cloud.compat.util.ThreadLocalRandom
-import java.util.zip.CRC32
+import com.linroid.ketch.cloud.compat.util.CRC32
 
 /**
  * 123 账号密码登录结果。
@@ -67,7 +68,7 @@ class Pan123Api(
     /** 标准 CRC-32（IEEE 802.3）→ 8 位小写十六进制（与 Python zlib.crc32 & 0xFFFFFFFF format 'x' 一致） */
     private fun crc32Hex(s: String): String {
         val crc = CRC32()
-        crc.update(s.toByteArray(Charsets.UTF_8))
+        crc.update(s.encodeToByteArray())
         return java.lang.Long.toHexString(crc.value and 0xFFFFFFFFL)
     }
 
@@ -646,7 +647,7 @@ class Pan123Api(
         // 形态 1：整段 base64（不含协议头的串）
         if (!trimmed.contains("://")) {
             return runCatching {
-                String(Base64.decode(trimmed, Base64.DEFAULT), Charsets.UTF_8)
+                (Base64.decode(trimmed, Base64.DEFAULT)).decodeToString()
                     .takeIf { it.startsWith("http", ignoreCase = true) }
             }.getOrNull()
         }
@@ -656,7 +657,7 @@ class Pan123Api(
         val params = trimmed.substring(idx + "params=".length).substringBefore("&")
         return runCatching {
             val normalized = params.replace('-', '+').replace('_', '/')
-            String(Base64.decode(normalized, Base64.DEFAULT), Charsets.UTF_8)
+            (Base64.decode(normalized, Base64.DEFAULT)).decodeToString()
         }.getOrNull()
     }
 

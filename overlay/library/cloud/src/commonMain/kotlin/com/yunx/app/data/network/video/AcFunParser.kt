@@ -20,8 +20,8 @@ package com.yunx.app.data.network.video
 
 import com.yunx.app.data.download.DownloadPathPolicy
 import com.linroid.ketch.cloud.compat.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.Locale
+import com.linroid.ketch.cloud.compat.util.SimpleDateFormat
+import com.linroid.ketch.cloud.compat.util.Locale
 
 /**
  * AcFun 解析器（移植自参考实现 `maibot-platform-parser/core/parsers/acfun.py`）。
