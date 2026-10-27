@@ -1,0 +1,94 @@
+--- a/app/ios/UCBrowserView.swift
++++ b/app/ios/UCBrowserView.swift
+@@ -69,7 +69,7 @@
+         }
+         UCWebView(webView: browser.webView)
+       }
+-      .navigationTitle("UC browser")
++      .navigationTitle("Web")
+       .navigationBarTitleDisplayMode(.inline)
+       .toolbar {
+         ToolbarItem(placement: .navigationBarLeading) {
+@@ -99,11 +99,19 @@
+   }
+ }
+ 
++/// Hosts whichever site's web view is current, so switching sites swaps views instead of reloading.
+ private struct UCWebView: UIViewRepresentable {
+   let webView: WKWebView
+ 
+-  func makeUIView(context: Context) -> WKWebView { webView }
+-  func updateUIView(_ uiView: WKWebView, context: Context) {}
++  func makeUIView(context: Context) -> UIView { UIView() }
++
++  func updateUIView(_ container: UIView, context: Context) {
++    guard webView.superview !== container else { return }
++    container.subviews.forEach { $0.removeFromSuperview() }
++    webView.frame = container.bounds
++    webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++    container.addSubview(webView)
++  }
+ }
+ 
+ @MainActor
+@@ -112,19 +120,29 @@
+   @Published var status: String?
+   @Published var confirmLogout = false
+   @Published var site = siteProfiles[0]
+-  let webView: WKWebView
++  @Published private(set) var webView: WKWebView
++  private var pages: [String: WKWebView] = [:]
+   private let incoming: IncomingDownloads
+ 
+   init(incoming: IncomingDownloads) {
+     self.incoming = incoming
++    self.webView = UCBrowserSession.makeWebView()
++    super.init()
++    attach(webView, for: siteProfiles[0])
++  }
++
++  private static func makeWebView() -> WKWebView {
+     let config = WKWebViewConfiguration()
+     // Important: nonpersistent() would log out after closing the browser or app.
+     config.websiteDataStore = WKWebsiteDataStore.default()
+-    self.webView = WKWebView(frame: .zero, configuration: config)
+-    super.init()
+-    webView.navigationDelegate = self
+-    webView.uiDelegate = self
+-    webView.load(URLRequest(url: URL(string: "https://drive.uc.cn/")!))
++    return WKWebView(frame: .zero, configuration: config)
++  }
++
++  private func attach(_ view: WKWebView, for profile: SiteProfile) {
++    view.navigationDelegate = self
++    view.uiDelegate = self
++    pages[profile.id] = view
++    view.load(URLRequest(url: URL(string: profile.startURL)!))
+   }
+ 
+   func go() {
+@@ -154,7 +172,14 @@
+   func select(_ profile: SiteProfile) {
+     site = profile
+     status = nil
+-    webView.load(URLRequest(url: URL(string: profile.startURL)!))
++    if let existing = pages[profile.id] {
++      webView = existing
++    } else {
++      let created = UCBrowserSession.makeWebView()
++      attach(created, for: profile)
++      webView = created
++    }
++    address = webView.url?.absoluteString ?? profile.startURL
+   }
+ 
+   private func queue(url: URL, from page: URL?) {
+@@ -236,7 +261,7 @@
+   }
+ 
+   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+-    if let url = webView.url { address = url.absoluteString }
++    if webView === self.webView, let url = webView.url { address = url.absoluteString }
+   }
+ 
+   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
