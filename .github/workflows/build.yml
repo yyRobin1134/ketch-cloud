@@ -1,4 +1,4 @@
-name: Build Ketch UC
+name: Build Ketch Cloud
 
 on:
   schedule:
@@ -34,7 +34,7 @@ jobs:
             tag=$(gh api repos/linroid/Ketch/releases --jq '[.[] | select(.tag_name | test("^v[0-9]")) | select(.prerelease | not)][0].tag_name')
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if gh release view "uc-$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
+          if gh release view "cloud-$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
@@ -73,7 +73,7 @@ jobs:
             git apply "$p"
           done
           # A distinct bundle id so this build installs next to upstream Ketch.
-          sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app;/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app.uc;/' app/ios/Ketch.xcodeproj/project.pbxproj
+          sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app;/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app.cloud;/' app/ios/Ketch.xcodeproj/project.pbxproj
           grep -n PRODUCT_BUNDLE_IDENTIFIER app/ios/Ketch.xcodeproj/project.pbxproj
 
       - name: Build app
@@ -98,7 +98,7 @@ jobs:
           mkdir -p /tmp/ipa/Payload
           cp -R ketch/app/ios/build/Release-iphoneos/Ketch.app /tmp/ipa/Payload/
           cd /tmp/ipa
-          zip -qry "/tmp/ketch-uc-ios-${TAG#v}.ipa" Payload
+          zip -qry "/tmp/ketch-cloud-ios-${TAG#v}.ipa" Payload
           ls -l /tmp/*.ipa
 
       - name: Publish release and update source
@@ -106,23 +106,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${TAG#v}
-          ipa="/tmp/ketch-uc-ios-$version.ipa"
+          ipa="/tmp/ketch-cloud-ios-$version.ipa"
           # A forced rebuild of the same upstream tag replaces its release.
-          gh release delete "uc-$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "uc-$TAG" "$ipa" --repo "$GITHUB_REPOSITORY" \
-            --title "Ketch UC $TAG" \
-            --notes "Ketch $TAG with the UC browser patch. Unsigned IPA for SideStore / LiveContainer."
+          gh release delete "cloud-$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "cloud-$TAG" "$ipa" --repo "$GITHUB_REPOSITORY" \
+            --title "Ketch Cloud $TAG" \
+            --notes "Ketch $TAG with cloud-drive patches. Unsigned IPA for SideStore / LiveContainer."
           cd ours
           python3 scripts/update_source.py \
             --version "${version%%-*}" \
             --build "${{ github.run_number }}" \
-            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/uc-$TAG/ketch-uc-ios-$version.ipa" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/cloud-$TAG/ketch-cloud-ios-$version.ipa" \
             --size "$(stat -f%z "$ipa")" \
             --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --notes "Ketch $TAG + UC browser patch"
+            --notes "Ketch $TAG + cloud-drive patches"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add source.json
-          git commit -m "Ketch UC $TAG"
+          git commit -m "Ketch Cloud $TAG"
           git pull --rebase
           git push

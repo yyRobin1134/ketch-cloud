@@ -19,14 +19,14 @@ diff --git a/app/ios/ContentView.swift b/app/ios/ContentView.swift
 +      Button {
 +        showingUCBrowser = true
 +      } label: {
-+        Label("UC", systemImage: "globe")
++        Label("Cloud", systemImage: "globe")
 +          .padding(.horizontal, 14)
 +          .padding(.vertical, 10)
 +          .background(.regularMaterial, in: Capsule())
 +      }
 +      .padding(.top, 10)
 +      .padding(.trailing, 12)
-+      .accessibilityLabel("Open UC browser")
++      .accessibilityLabel("Open cloud login browser")
 +    }
 +    .sheet(isPresented: $showingUCBrowser) {
 +      UCBrowserView(incoming: incoming)
