@@ -1,0 +1,179 @@
+--- a/app/ios/CloudView.swift
++++ b/app/ios/CloudView.swift
+@@ -38,6 +38,7 @@
+   @Published var rows: [CloudRow] = []
+   @Published var selected: Set<UUID> = []
+   @Published var loggedIn: Set<String> = []
++  @Published var mergedFile: MergedFile?
+   private var history: [[CloudRow]] = []
+ 
+   init(incoming: IncomingDownloads, initialText: String?) {
+@@ -138,6 +139,18 @@
+             status = resolved.error ?? "Could not get a download link."
+             continue
+           }
++          if let audio = link.audioUrl {
++            // Two streams: the app downloads and joins them, then offers the file to save.
++            let merged = try await DashMerger.merge(
++              videoURL: link.url, videoHeaders: link.headers,
++              audioURL: audio, audioHeaders: link.audioHeaders,
++              name: link.fileName,
++              progress: { [weak self] text in self?.status = text }
++            )
++            mergedFile = MergedFile(url: merged)
++            status = "Merged. Save the file from the share sheet."
++            continue
++          }
+           incoming.offerCloudDownload(url: link.url, fileName: link.fileName, headers: link.headers)
+           sent += 1
+         } catch {
+@@ -264,6 +277,9 @@
+         Task { await model.refreshLogin() }
+       }
+     }
++    .sheet(item: $model.mergedFile) { merged in
++      ShareSheet(url: merged.url)
++    }
+     .sheet(item: $passwordPlatform) { platform in
+       CloudPasswordLoginView(platform: platform, service: model.service) {
+         Task { await model.refreshLogin() }
+--- a/app/ios/DashMerger.swift
++++ b/app/ios/DashMerger.swift
+@@ -0,0 +1,103 @@
++import AVFoundation
++import SwiftUI
++import UIKit
++
++struct MergedFile: Identifiable {
++  let id = UUID()
++  let url: URL
++}
++
++enum DashMergeError: LocalizedError {
++  case badURL
++  case http(Int)
++  case noTracks
++  case exportFailed(String)
++
++  var errorDescription: String? {
++    switch self {
++    case .badURL: return "Invalid stream address."
++    case .http(let code): return "The stream server answered HTTP \(code)."
++    case .noTracks: return "The streams have no usable video or audio track."
++    case .exportFailed(let message): return "Merging failed: \(message)"
++    }
++  }
++}
++
++/// Bilibili's higher qualities keep picture and sound in two streams. This downloads both, joins
++/// them into one MP4 without re-encoding, and returns the file for the share sheet.
++enum DashMerger {
++  static func merge(
++    videoURL: String, videoHeaders: [String: String],
++    audioURL: String, audioHeaders: [String: String],
++    name: String,
++    progress: @escaping @MainActor (String) -> Void
++  ) async throws -> URL {
++    let work = FileManager.default.temporaryDirectory.appendingPathComponent("dash-\(UUID().uuidString)")
++    try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
++    defer { try? FileManager.default.removeItem(at: work.appendingPathComponent("parts")) }
++    let parts = work.appendingPathComponent("parts")
++    try FileManager.default.createDirectory(at: parts, withIntermediateDirectories: true)
++
++    await progress("Downloading video stream…")
++    let video = try await fetch(videoURL, headers: videoHeaders, to: parts.appendingPathComponent("video.mp4"))
++    await progress("Downloading audio stream…")
++    let audio = try await fetch(audioURL, headers: audioHeaders, to: parts.appendingPathComponent("audio.m4a"))
++
++    await progress("Merging…")
++    let videoAsset = AVURLAsset(url: video)
++    let audioAsset = AVURLAsset(url: audio)
++    guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first,
++          let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
++      throw DashMergeError.noTracks
++    }
++    let duration = try await videoAsset.load(.duration)
++    let composition = AVMutableComposition()
++    guard let outVideo = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
++          let outAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
++      throw DashMergeError.noTracks
++    }
++    try outVideo.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: videoTrack, at: .zero)
++    let audioDuration = try await audioAsset.load(.duration)
++    try outAudio.insertTimeRange(
++      CMTimeRange(start: .zero, duration: min(duration, audioDuration)), of: audioTrack, at: .zero)
++    outVideo.preferredTransform = try await videoTrack.load(.preferredTransform)
++
++    let safe = name.map { "/\\:?*\"<>|".contains($0) ? "_" : String($0) }.joined()
++    let base = safe.hasSuffix(".mp4") ? String(safe.dropLast(4)) : safe
++    let output = work.appendingPathComponent("\(base.isEmpty ? "video" : base).mp4")
++    guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
++      throw DashMergeError.exportFailed("no exporter")
++    }
++    export.outputURL = output
++    export.outputFileType = .mp4
++    await export.export()
++    if export.status != .completed {
++      throw DashMergeError.exportFailed(export.error?.localizedDescription ?? "unknown error")
++    }
++    return output
++  }
++
++  private static func fetch(_ address: String, headers: [String: String], to file: URL) async throws -> URL {
++    guard let url = URL(string: address) else { throw DashMergeError.badURL }
++    var request = URLRequest(url: url)
++    for (key, value) in headers where !key.isEmpty { request.setValue(value, forHTTPHeaderField: key) }
++    let (temp, response) = try await URLSession.shared.download(for: request)
++    if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
++      throw DashMergeError.http(http.statusCode)
++    }
++    try? FileManager.default.removeItem(at: file)
++    try FileManager.default.moveItem(at: temp, to: file)
++    return file
++  }
++}
++
++/// The system share sheet, so the merged file can be saved to Files or Photos.
++struct ShareSheet: UIViewControllerRepresentable {
++  let url: URL
++
++  func makeUIViewController(context: Context) -> UIActivityViewController {
++    UIActivityViewController(activityItems: [url], applicationActivities: nil)
++  }
++
++  func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
++}
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -11,6 +11,7 @@
+ 		A002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002 /* ContentView.swift */; };
+ 		A006 /* CloudView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016 /* CloudView.swift */; };
+ 		A007 /* WebPageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B017 /* WebPageLoader.swift */; };
++		A008 /* DashMerger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B018 /* DashMerger.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+ 		A004 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = D004 /* InfoPlist.strings */; };
+ /* End PBXBuildFile section */
+@@ -21,6 +22,7 @@
+ 		B002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+ 		B016 /* CloudView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudView.swift; sourceTree = "<group>"; };
+ 		B017 /* WebPageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageLoader.swift; sourceTree = "<group>"; };
++		B018 /* DashMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashMerger.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		B004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+ 		B005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+@@ -64,6 +66,7 @@
+ 				B002 /* ContentView.swift */,
+ 				B016 /* CloudView.swift */,
+ 				B017 /* WebPageLoader.swift */,
++				B018 /* DashMerger.swift */,
+ 			);
+ 			name = Sources;
+ 			sourceTree = "<group>";
+@@ -196,6 +199,7 @@
+ 				A002 /* ContentView.swift in Sources */,
+ 				A006 /* CloudView.swift in Sources */,
+ 				A007 /* WebPageLoader.swift in Sources */,
++				A008 /* DashMerger.swift in Sources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};

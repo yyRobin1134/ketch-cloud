@@ -112,6 +112,9 @@ class CloudLink(
   val fileName: String,
   val size: Long,
   val headers: Map<String, String>,
+  /** Set for Bilibili DASH: the sound track, a separate stream the app merges with the picture. */
+  val audioUrl: String? = null,
+  val audioHeaders: Map<String, String> = emptyMap(),
 )
 
 /** Outcome of [CloudService.openShare]: a share, or a message to show. */
@@ -413,7 +416,11 @@ class CloudService(context: Context) {
 
   private fun mediaEntry(media: VideoMedia, fallbackName: String): CloudEntry {
     val name = media.fileName.ifBlank { fallbackName }
-    val label = if (media.isHls) "$name（HLS 流）" else name
+    val label = when {
+      media.isHls -> "$name（HLS 流）"
+      media.audioUrl.isNotBlank() -> "$name（分轨，下载后合并）"
+      else -> name
+    }
     return CloudEntry(label, media.size.coerceAtLeast(0L), false, null, media.copy(fileName = name))
   }
 
@@ -434,16 +441,6 @@ class CloudService(context: Context) {
       }
       val suffix = if (result.medias.size > 1) "-${index + 1}" else ""
       entries += mediaEntry(media, "$base$suffix$ext")
-      // Bilibili DASH keeps picture and sound in two streams; each is offered as its own file.
-      if (media.audioUrl.isNotBlank()) {
-        val audio = VideoMedia(
-          url = media.audioUrl,
-          kind = VideoMediaKind.AUDIO,
-          fileName = "$base$suffix.m4a",
-          headers = media.audioHeaders,
-        )
-        entries += mediaEntry(audio, "$base$suffix.m4a")
-      }
     }
     if (entries.isEmpty()) throw IllegalStateException(result.notice.ifBlank { "没有找到可下载的内容" })
     val platform = platformList.firstOrNull { it.video == result.platform } ?: platformById("github")
@@ -529,7 +526,10 @@ class CloudService(context: Context) {
   suspend fun resolve(share: CloudShare, file: CloudEntry): CloudLink {
     file.media?.let { media ->
       if (media.isHls) throw IllegalStateException("这是 HLS 分段流，Ketch 暂时无法直接下载")
-      return CloudLink(media.url, media.fileName, media.size.coerceAtLeast(0L), media.headers)
+      return CloudLink(
+        media.url, media.fileName, media.size.coerceAtLeast(0L), media.headers,
+        media.audioUrl.takeIf { it.isNotBlank() }, media.audioHeaders,
+      )
     }
     val platform = share.platform.platform ?: throw IllegalStateException("无法下载这个条目")
     val session = share.session ?: throw IllegalStateException("分享已失效，请重新打开")
