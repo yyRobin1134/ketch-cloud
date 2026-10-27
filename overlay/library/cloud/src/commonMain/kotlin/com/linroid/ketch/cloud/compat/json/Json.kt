@@ -84,7 +84,7 @@ private fun parseNumber(text: String): Any {
   return if (long in Int.MIN_VALUE..Int.MAX_VALUE) long.toInt() else long
 }
 
-private val lenientJson = Json { isLenient = true; allowSpecialFloatingPointLiterals = true }
+private val lenientJson = Json { isLenient = true; allowSpecialFloatingPointValues = true }
 
 private fun parse(text: String): Any {
   val element = try {
