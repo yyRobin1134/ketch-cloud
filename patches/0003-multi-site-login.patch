@@ -1,0 +1,186 @@
+diff --git a/app/ios/UCBrowserView.swift b/app/ios/UCBrowserView.swift
+index cf5d7b4..634184a 100644
+--- a/app/ios/UCBrowserView.swift
++++ b/app/ios/UCBrowserView.swift
+@@ -2,6 +2,36 @@ import SwiftUI
+ import WebKit
+ import KetchApp
+ 
++/// A cookie-login cloud drive the in-app browser can hand downloads over for. Cookies are only
++/// ever sent to hosts ending in one of [hostSuffixes], and only when every [sessionCookies] name
++/// is present and unexpired.
++private struct SiteProfile: Identifiable, Hashable {
++  let id: String
++  let name: String
++  let startURL: String
++  let referer: String
++  let hostSuffixes: [String]
++  let sessionCookies: [String]
++}
++
++private let siteProfiles: [SiteProfile] = [
++  SiteProfile(id: "uc", name: "UC", startURL: "https://drive.uc.cn/", referer: "https://drive.uc.cn/",
++              hostSuffixes: ["uc.cn"], sessionCookies: ["__pus", "__puus"]),
++  SiteProfile(id: "quark", name: "Quark", startURL: "https://pan.quark.cn/",
++              referer: "https://pan.quark.cn/", hostSuffixes: ["quark.cn"],
++              sessionCookies: ["__pus", "__puus"]),
++  SiteProfile(id: "baidu", name: "Baidu", startURL: "https://pan.baidu.com/",
++              referer: "https://pan.baidu.com/", hostSuffixes: ["baidu.com", "baidupcs.com"],
++              sessionCookies: ["BDUSS"]),
++  SiteProfile(id: "115", name: "115", startURL: "https://115.com/", referer: "https://115.com/",
++              hostSuffixes: ["115.com"], sessionCookies: ["UID", "SEID"]),
++]
++
++private func hostMatches(_ host: String?, _ profile: SiteProfile) -> Bool {
++  guard let host = host?.lowercased() else { return false }
++  return profile.hostSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
++}
++
+ /// UC login remains in WebKit's persistent store across Ketch restarts.
+ /// The store is Ketch's, not Safari's: the user logs in once inside this browser.
+ struct UCBrowserView: View {
+@@ -46,6 +76,11 @@ struct UCBrowserView: View {
+           Button("Close") { dismiss() }
+         }
+         ToolbarItemGroup(placement: .bottomBar) {
++          Menu {
++            ForEach(siteProfiles) { site in
++              Button(site.name) { browser.select(site) }
++            }
++          } label: { Text(browser.site.name) }
+           Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
+           Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }
+           Spacer()
+@@ -55,11 +90,11 @@ struct UCBrowserView: View {
+       }
+     }
+     .navigationViewStyle(.stack)
+-    .alert("Sign out of UC?", isPresented: $browser.confirmLogout) {
++    .alert("Sign out of \(browser.site.name)?", isPresented: $browser.confirmLogout) {
+       Button("Sign out", role: .destructive) { browser.logout() }
+       Button("Cancel", role: .cancel) {}
+     } message: {
+-      Text("Clears the UC login stored inside Ketch. Saved Ketch downloads keep their own headers.")
++      Text("Clears this site's login stored inside Ketch. Saved Ketch downloads keep their own headers.")
+     }
+   }
+ }
+@@ -76,6 +111,7 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+   @Published var address = "https://drive.uc.cn/"
+   @Published var status: String?
+   @Published var confirmLogout = false
++  @Published var site = siteProfiles[0]
+   let webView: WKWebView
+   private let incoming: IncomingDownloads
+ 
+@@ -111,9 +147,14 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+     queue(url: url, from: webView.url)
+   }
+ 
+-  private func ucHost(_ host: String?) -> Bool {
+-    guard let host = host?.lowercased() else { return false }
+-    return host == "uc.cn" || host.hasSuffix(".uc.cn")
++  private func profile(for host: String?) -> SiteProfile? {
++    siteProfiles.first { hostMatches(host, $0) }
++  }
++
++  func select(_ profile: SiteProfile) {
++    site = profile
++    status = nil
++    webView.load(URLRequest(url: URL(string: profile.startURL)!))
+   }
+ 
+   private func queue(url: URL, from page: URL?) {
+@@ -123,17 +164,18 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+     }
+     // UC download links often redirect to storage hosts outside uc.cn. Those still need the UC
+     // referer, but the session cookies are only ever sent to uc.cn hosts.
+-    let toUC = ucHost(url.host)
+-    let referer = (ucHost(page?.host) ? page?.absoluteString : nil) ?? "https://drive.uc.cn/"
++    let target = profile(for: url.host)
++    let origin = target ?? site
++    let referer = (hostMatches(page?.host, origin) ? page?.absoluteString : nil) ?? origin.referer
+     webView.evaluateJavaScript("navigator.userAgent") { [weak self] agent, _ in
+       guard let self else { return }
+       let userAgent = agent as? String ?? ""
+       self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+-        if !Self.hasUCSession(cookies) && toUC {
+-          self.status = "UC login missing or expired. Sign in at drive.uc.cn again."
++        if let target, !Self.hasSession(cookies, target) {
++          self.status = "\(target.name) login missing or expired. Sign in again."
+           return
+         }
+-        let applicable = toUC ? cookies.filter { Self.applies($0, to: url) } : []
++        let applicable = target != nil ? cookies.filter { Self.applies($0, to: url) } : []
+         let cookieHeader = applicable.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+         self.incoming.offerBrowserDownload(
+           url: url.absoluteString,
+@@ -146,22 +188,27 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+     }
+   }
+ 
+-  /// A usable UC login carries both __pus and __puus.
+-  private static func hasUCSession(_ cookies: [HTTPCookie]) -> Bool {
+-    let live = cookies.filter {
+-      $0.domain.lowercased().hasSuffix("uc.cn") && ($0.expiresDate.map { $0 > Date() } ?? true)
++  /// A usable login carries every cookie the profile names, unexpired, on one of its domains.
++  private static func hasSession(_ cookies: [HTTPCookie], _ profile: SiteProfile) -> Bool {
++    let live = cookies.filter { cookie in
++      let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
++      return profile.hostSuffixes.contains { domain == $0 || domain.hasSuffix("." + $0) } &&
++        (cookie.expiresDate.map { $0 > Date() } ?? true)
+     }
+-    return live.contains { $0.name == "__pus" } && live.contains { $0.name == "__puus" }
++    return profile.sessionCookies.allSatisfy { name in live.contains { $0.name == name } }
+   }
+ 
+   func logout() {
+     let store = WKWebsiteDataStore.default()
+     store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { records in
+-      let ucRecords = records.filter { $0.displayName.lowercased().hasSuffix("uc.cn") }
+-      store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: ucRecords) {
++      let site = self.site
++      let siteRecords = records.filter { record in
++        site.hostSuffixes.contains { record.displayName.lowercased().hasSuffix($0) }
++      }
++      store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: siteRecords) {
+         Task { @MainActor in
+-          self.status = "Signed out of UC."
+-          self.webView.load(URLRequest(url: URL(string: "https://drive.uc.cn/")!))
++          self.status = "Signed out of \(site.name)."
++          self.webView.load(URLRequest(url: URL(string: site.startURL)!))
+         }
+       }
+     }
+@@ -206,7 +253,7 @@ private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDe
+           let response = navigationResponse.response as? HTTPURLResponse,
+           (200...299).contains(response.statusCode),
+           let url = response.url,
+-          ucHost(url.host) || ucHost(webView.url?.host) else {
++          profile(for: url.host) != nil || profile(for: webView.url?.host) != nil else {
+       decisionHandler(.allow)
+       return
+     }
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+index 331f738..96bd6bb 100644
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+@@ -190,8 +190,9 @@ class IncomingDownloads {
+     val match = Regex("^https://([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)", RegexOption.IGNORE_CASE)
+       .find(trimmed) ?: return
+     val host = match.groupValues[1].lowercase()
+-    // Storage hosts behind UC links are outside uc.cn; only uc.cn hosts may receive the cookie.
+-    val isUc = host == "uc.cn" || host.endsWith(".uc.cn")
++    // Storage hosts behind drive links are often outside the drive's own domain; only the
++    // cookie-login sites below may receive the cookie.
++    val isUc = BROWSER_LOGIN_HOSTS.any { host == it || host.endsWith(".$it") }
+     fun header(value: String) = value.trim().takeIf { text ->
+       text.isNotBlank() && text.none { it == '\r' || it == '\n' || it == '\u0000' }
+     }
+@@ -256,3 +257,6 @@ fun torrentFileDownload(name: String, bytes: ByteArray): IncomingDownload = when
+   )
+   else -> IncomingDownload.Ready(name, bytes)
+ }
++
++/** Sites whose in-app browser login may be attached to a downloaded file's request. */
++private val BROWSER_LOGIN_HOSTS = listOf("uc.cn", "quark.cn", "baidu.com", "baidupcs.com", "115.com")
