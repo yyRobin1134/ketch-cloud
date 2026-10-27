@@ -1,0 +1,51 @@
+name: Check cloud module
+
+on:
+  push:
+    paths:
+      - "overlay/**"
+      - ".github/workflows/check-cloud.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm:
+    name: JVM tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ours
+
+      - name: Pick latest Ketch release
+        id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api repos/linroid/Ketch/releases --jq '[.[] | select(.tag_name | test("^v[0-9]")) | select(.prerelease | not)][0].tag_name')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: linroid/Ketch
+          ref: ${{ steps.t.outputs.tag }}
+          path: ketch
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Add the cloud module
+        working-directory: ketch
+        run: |
+          cp -R ../ours/overlay/. .
+          echo 'include(":library:cloud")' >> settings.gradle.kts
+
+      - name: Run tests
+        working-directory: ketch
+        run: ./gradlew :library:cloud:jvmTest --no-daemon --stacktrace -PprebuiltWebDir=build/no-web-app
