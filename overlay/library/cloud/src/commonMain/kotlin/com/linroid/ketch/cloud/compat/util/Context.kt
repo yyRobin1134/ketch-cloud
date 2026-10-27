@@ -5,6 +5,8 @@ package com.linroid.ketch.cloud.compat.util
  * account and device-fingerprint stores use. Values live in the platform's preference store
  * (`NSUserDefaults` on iOS); on the JVM they stay in memory, which is enough for tests.
  */
+@OptIn(kotlin.experimental.ExperimentalObjCName::class)
+@kotlin.native.ObjCName("CompatContext")
 class Context {
   val applicationContext: Context get() = this
 

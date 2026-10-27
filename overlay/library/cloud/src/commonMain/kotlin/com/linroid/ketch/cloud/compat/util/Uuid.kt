@@ -3,6 +3,8 @@ package com.linroid.ketch.cloud.compat.util
 import kotlin.random.Random
 
 /** `java.util.UUID`, only the random (version 4) generator and its string form. */
+@OptIn(kotlin.experimental.ExperimentalObjCName::class)
+@kotlin.native.ObjCName("CompatUUID")
 class UUID private constructor(private val text: String) {
   override fun toString(): String = text
   override fun equals(other: Any?): Boolean = other is UUID && other.text == text
