@@ -115,6 +115,8 @@ class CloudLink(
   /** Set for Bilibili DASH: the sound track, a separate stream the app merges with the picture. */
   val audioUrl: String? = null,
   val audioHeaders: Map<String, String> = emptyMap(),
+  /** True for an m3u8 playlist: the app downloads its segments and joins them. */
+  val isHls: Boolean = false,
 )
 
 /** Outcome of [CloudService.openShare]: a share, or a message to show. */
@@ -525,10 +527,9 @@ class CloudService(context: Context) {
   @Throws(Exception::class, CancellationException::class)
   suspend fun resolve(share: CloudShare, file: CloudEntry): CloudLink {
     file.media?.let { media ->
-      if (media.isHls) throw IllegalStateException("这是 HLS 分段流，Ketch 暂时无法直接下载")
       return CloudLink(
         media.url, media.fileName, media.size.coerceAtLeast(0L), media.headers,
-        media.audioUrl.takeIf { it.isNotBlank() }, media.audioHeaders,
+        media.audioUrl.takeIf { it.isNotBlank() }, media.audioHeaders, media.isHls,
       )
     }
     val platform = share.platform.platform ?: throw IllegalStateException("无法下载这个条目")

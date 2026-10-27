@@ -1,0 +1,273 @@
+--- a/app/ios/CloudView.swift
++++ b/app/ios/CloudView.swift
+@@ -139,6 +139,15 @@
+             status = resolved.error ?? "Could not get a download link."
+             continue
+           }
++          if link.isHls {
++            let joined = try await HlsDownloader.download(
++              playlist: link.url, headers: link.headers, name: link.fileName,
++              progress: { [weak self] text in self?.status = text }
++            )
++            mergedFile = MergedFile(url: joined)
++            status = "Downloaded. Save the file from the share sheet."
++            continue
++          }
+           if let audio = link.audioUrl {
+             // Two streams: the app downloads and joins them, then offers the file to save.
+             let merged = try await DashMerger.merge(
+--- a/app/ios/HlsDownloader.swift
++++ b/app/ios/HlsDownloader.swift
+@@ -0,0 +1,218 @@
++import CommonCrypto
++import Foundation
++
++enum HlsError: LocalizedError {
++  case badPlaylist(String)
++  case http(Int)
++  case unsupported(String)
++  case decrypt
++
++  var errorDescription: String? {
++    switch self {
++    case .badPlaylist(let why): return "Unusable playlist: \(why)"
++    case .http(let code): return "The stream server answered HTTP \(code)."
++    case .unsupported(let what): return "Not supported: \(what)"
++    case .decrypt: return "A segment could not be decrypted."
++    }
++  }
++}
++
++/// Downloads an HLS (m3u8) stream segment by segment and joins the segments into one file:
++/// `.ts` for MPEG-TS streams, `.mp4` for fragmented-MP4 streams. Plain and AES-128 encrypted
++/// streams are handled; DRM-protected streams are refused.
++enum HlsDownloader {
++  private struct KeyInfo {
++    let uri: URL
++    let iv: Data?
++  }
++
++  private struct Segment {
++    let url: URL
++    let key: KeyInfo?
++    let sequence: Int
++  }
++
++  static func download(
++    playlist address: String, headers: [String: String], name: String,
++    progress: @escaping @MainActor (String) -> Void
++  ) async throws -> URL {
++    guard let start = URL(string: address) else { throw HlsError.badPlaylist("bad address") }
++    var playlistURL = start
++    var text = try await fetchText(playlistURL, headers)
++    if text.contains("#EXT-X-STREAM-INF") {
++      playlistURL = try bestVariant(text, base: playlistURL)
++      text = try await fetchText(playlistURL, headers)
++    }
++
++    var segments: [Segment] = []
++    var map: URL?
++    var key: KeyInfo?
++    var sequence = 0
++    var pendingDuration = false
++    for raw in text.components(separatedBy: .newlines) {
++      let line = raw.trimmingCharacters(in: .whitespaces)
++      if line.isEmpty { continue }
++      if line.hasPrefix("#EXT-X-MEDIA-SEQUENCE:") {
++        sequence = Int(line.dropFirst("#EXT-X-MEDIA-SEQUENCE:".count)) ?? 0
++      } else if line.hasPrefix("#EXT-X-KEY:") {
++        let attrs = attributes(String(line.dropFirst("#EXT-X-KEY:".count)))
++        let method = attrs["METHOD"] ?? "NONE"
++        if method == "NONE" {
++          key = nil
++        } else if method == "AES-128" {
++          guard let uri = attrs["URI"], let url = URL(string: uri, relativeTo: playlistURL) else {
++            throw HlsError.badPlaylist("key address")
++          }
++          key = KeyInfo(uri: url.absoluteURL, iv: attrs["IV"].flatMap(hexData))
++        } else {
++          throw HlsError.unsupported("encryption \(method)")
++        }
++      } else if line.hasPrefix("#EXT-X-MAP:") {
++        let attrs = attributes(String(line.dropFirst("#EXT-X-MAP:".count)))
++        if let uri = attrs["URI"], let url = URL(string: uri, relativeTo: playlistURL) {
++          map = url.absoluteURL
++        }
++      } else if line.hasPrefix("#EXTINF:") {
++        pendingDuration = true
++      } else if !line.hasPrefix("#") {
++        guard let url = URL(string: line, relativeTo: playlistURL) else { continue }
++        segments.append(Segment(url: url.absoluteURL, key: key, sequence: sequence))
++        sequence += 1
++        pendingDuration = false
++      }
++    }
++    if segments.isEmpty { throw HlsError.badPlaylist("no segments") }
++
++    let ext = map != nil ? "mp4" : "ts"
++    let safe = name.map { "/\\:?*\"<>|".contains($0) ? "_" : String($0) }.joined()
++    let stem = (safe as NSString).deletingPathExtension
++    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("hls-\(UUID().uuidString)")
++    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
++    let output = dir.appendingPathComponent("\(stem.isEmpty ? "video" : stem).\(ext)")
++    FileManager.default.createFile(atPath: output.path, contents: nil)
++    let handle = try FileHandle(forWritingTo: output)
++    defer { try? handle.close() }
++
++    if let map {
++      handle.write(try await fetchData(map, headers))
++    }
++    var keys: [URL: Data] = [:]
++    let batch = 6
++    var index = 0
++    while index < segments.count {
++      let slice = Array(segments[index..<min(index + batch, segments.count)])
++      for segment in slice {
++        if let info = segment.key, keys[info.uri] == nil {
++          keys[info.uri] = try await fetchData(info.uri, headers)
++        }
++      }
++      let chunks = try await withThrowingTaskGroup(of: (Int, Data).self) { group -> [Data] in
++        for (offset, segment) in slice.enumerated() {
++          let keyData = segment.key.flatMap { keys[$0.uri] }
++          group.addTask {
++            var data = try await fetchData(segment.url, headers)
++            if let info = segment.key, let keyData {
++              let iv = info.iv ?? ivFromSequence(segment.sequence)
++              guard let plain = aesDecrypt(data, key: keyData, iv: iv) else { throw HlsError.decrypt }
++              data = plain
++            }
++            return (offset, data)
++          }
++        }
++        var found: [(Int, Data)] = []
++        for try await item in group { found.append(item) }
++        return found.sorted { $0.0 < $1.0 }.map { $0.1 }
++      }
++      for chunk in chunks { handle.write(chunk) }
++      index += slice.count
++      await progress("Downloading stream \(index)/\(segments.count)…")
++    }
++    return output
++  }
++
++  private static func bestVariant(_ text: String, base: URL) throws -> URL {
++    var best: (Int, URL)?
++    let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
++    for (offset, line) in lines.enumerated() where line.hasPrefix("#EXT-X-STREAM-INF:") {
++      let attrs = attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count)))
++      let bandwidth = Int(attrs["BANDWIDTH"] ?? "") ?? 0
++      guard let next = lines[(offset + 1)...].first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
++            let url = URL(string: next, relativeTo: base)?.absoluteURL else { continue }
++      if best == nil || bandwidth > best!.0 { best = (bandwidth, url) }
++    }
++    guard let best else { throw HlsError.badPlaylist("no variants") }
++    return best.1
++  }
++
++  private static func attributes(_ text: String) -> [String: String] {
++    var result: [String: String] = [:]
++    guard let regex = try? NSRegularExpression(pattern: "([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)") else { return result }
++    let range = NSRange(text.startIndex..., in: text)
++    for match in regex.matches(in: text, range: range) {
++      guard let k = Range(match.range(at: 1), in: text), let v = Range(match.range(at: 2), in: text) else { continue }
++      result[String(text[k])] = String(text[v]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
++    }
++    return result
++  }
++
++  private static func hexData(_ text: String) -> Data? {
++    var hex = text
++    if hex.hasPrefix("0x") || hex.hasPrefix("0X") { hex = String(hex.dropFirst(2)) }
++    guard hex.count % 2 == 0 else { return nil }
++    var data = Data()
++    var index = hex.startIndex
++    while index < hex.endIndex {
++      let next = hex.index(index, offsetBy: 2)
++      guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
++      data.append(byte)
++      index = next
++    }
++    return data
++  }
++
++  private static func ivFromSequence(_ sequence: Int) -> Data {
++    var data = Data(count: 16)
++    var value = UInt64(sequence).bigEndian
++    withUnsafeBytes(of: &value) { bytes in
++      for (offset, byte) in bytes.enumerated() { data[8 + offset] = byte }
++    }
++    return data
++  }
++
++  private static func aesDecrypt(_ data: Data, key: Data, iv: Data) -> Data? {
++    var out = Data(count: data.count + kCCBlockSizeAES128)
++    var moved = 0
++    let capacity = out.count
++    let status = out.withUnsafeMutableBytes { outPtr in
++      data.withUnsafeBytes { inPtr in
++        key.withUnsafeBytes { keyPtr in
++          iv.withUnsafeBytes { ivPtr in
++            CCCrypt(
++              CCOperation(kCCDecrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding),
++              keyPtr.baseAddress, key.count, ivPtr.baseAddress,
++              inPtr.baseAddress, data.count, outPtr.baseAddress, capacity, &moved)
++          }
++        }
++      }
++    }
++    guard status == kCCSuccess else { return nil }
++    out.count = moved
++    return out
++  }
++
++  private static func fetchData(_ url: URL, _ headers: [String: String]) async throws -> Data {
++    var request = URLRequest(url: url)
++    for (key, value) in headers where !key.isEmpty { request.setValue(value, forHTTPHeaderField: key) }
++    let (data, response) = try await URLSession.shared.data(for: request)
++    if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
++      throw HlsError.http(http.statusCode)
++    }
++    return data
++  }
++
++  private static func fetchText(_ url: URL, _ headers: [String: String]) async throws -> String {
++    let data = try await fetchData(url, headers)
++    guard let text = String(data: data, encoding: .utf8) else { throw HlsError.badPlaylist("not text") }
++    return text
++  }
++}
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -12,6 +12,7 @@
+ 		A006 /* CloudView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016 /* CloudView.swift */; };
+ 		A007 /* WebPageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B017 /* WebPageLoader.swift */; };
+ 		A008 /* DashMerger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B018 /* DashMerger.swift */; };
++		A009 /* HlsDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B019 /* HlsDownloader.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+ 		A004 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = D004 /* InfoPlist.strings */; };
+ /* End PBXBuildFile section */
+@@ -23,6 +24,7 @@
+ 		B016 /* CloudView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudView.swift; sourceTree = "<group>"; };
+ 		B017 /* WebPageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageLoader.swift; sourceTree = "<group>"; };
+ 		B018 /* DashMerger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashMerger.swift; sourceTree = "<group>"; };
++		B019 /* HlsDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HlsDownloader.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		B004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+ 		B005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+@@ -67,6 +69,7 @@
+ 				B016 /* CloudView.swift */,
+ 				B017 /* WebPageLoader.swift */,
+ 				B018 /* DashMerger.swift */,
++				B019 /* HlsDownloader.swift */,
+ 			);
+ 			name = Sources;
+ 			sourceTree = "<group>";
+@@ -200,6 +203,7 @@
+ 				A006 /* CloudView.swift in Sources */,
+ 				A007 /* WebPageLoader.swift in Sources */,
+ 				A008 /* DashMerger.swift in Sources */,
++				A009 /* HlsDownloader.swift in Sources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
