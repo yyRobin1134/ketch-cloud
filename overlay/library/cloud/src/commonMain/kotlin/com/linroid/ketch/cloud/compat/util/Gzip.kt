@@ -10,8 +10,6 @@ class CRC32 {
 
   val value: Long get() = (crc.inv()).toLong() and 0xFFFFFFFFL
 
-  fun getValue(): Long = value
-
   fun reset() {
     crc = 0xFFFFFFFFL.toInt()
   }

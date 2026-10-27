@@ -20,7 +20,6 @@ class Locale private constructor(val tag: String) {
 
 /** `java.util.Date`. */
 class Date(val time: Long = currentTimeMillis()) {
-  fun getTime(): Long = time
   override fun toString(): String = Instant.fromEpochMilliseconds(time).toString()
 }
 
