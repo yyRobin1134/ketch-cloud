@@ -42,6 +42,7 @@ IMPORT_MAP = [
     (r"^import java\.text\.SimpleDateFormat$", util("SimpleDateFormat")),
     (r"^import java\.util\.(Date|Locale|Calendar|TimeZone)$", lambda m: util(m.group(1))),
     (r"^import java\.math\.BigInteger$", util("BigInteger")),
+    (r"^import java\.util\.UUID$", util("UUID")),
     (r"^import java\.io\.ByteArrayOutputStream$", util("ByteArrayOutputStream")),
     # Charsets are spelled out by the rewrites below; drop the JVM-only import.
     (r"^import java\.nio\.charset\.StandardCharsets" + NL, ""),
@@ -85,6 +86,8 @@ MANUAL = {
     "data/security/CredentialCipher.kt",
     "util/DiagnosticLog.kt",
     "util/LogRedactor.kt",
+    "data/db/AppDatabase.kt",
+    "data/db/AccountDao.kt",
 }
 # Not ported at all: OkHttp interceptors have no counterpart in the compat client.
 SKIP = {
@@ -188,7 +191,24 @@ def remove_function(text: str, name: str, rel: str) -> str:
     return text[:start] + text[k:]
 
 
+def strip_room(text: str) -> str:
+    """Room entity -> plain `@Serializable` data class, so rows can be stored as JSON."""
+    text = re.sub(r"^import androidx\.room\.[\w.]+" + NL, "", text, flags=re.M)
+    text = re.sub(r"^@Entity\(.*\)" + NL, "", text, flags=re.M)
+    text = re.sub(r"^[ \t]*@(?:PrimaryKey|ColumnInfo)(?:\(.*\))?" + NL, "", text, flags=re.M)
+    text = re.sub(r"^(data class )", "@Serializable" + NL + r"\1", text, count=1, flags=re.M)
+    return re.sub(
+        r"^(package [\w.]+)" + NL,
+        lambda m: m.group(1) + NL + NL + "import kotlinx.serialization.Serializable" + NL,
+        text,
+        count=1,
+        flags=re.M,
+    )
+
+
 def port(text: str, rel: str) -> str:
+    if re.fullmatch(r"data/db/\w+AccountEntity\.kt", rel):
+        text = strip_room(text)
     for pattern, repl in IMPORT_MAP:
         text = re.sub(pattern, repl, text, flags=re.M)
     for pattern, repl in BODY_MAP:
