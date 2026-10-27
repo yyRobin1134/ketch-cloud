@@ -19,6 +19,7 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
+import com.linroid.ketch.cloud.compat.util.IO
 
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.QuotaInfo

@@ -40,6 +40,17 @@ AUTO_IMPORTS = {
     "currentTimeMillis()": "currentTimeMillis",
     "nanoTime()": "nanoTime",
     "sleepBlocking(": "sleepBlocking",
+    "Dispatchers.IO": "IO",
+}
+# Files ported by hand because they use platform APIs; the script never overwrites them.
+MANUAL = {
+    "data/network/HttpClients.kt",
+    "util/DiagnosticLog.kt",
+    "util/LogRedactor.kt",
+}
+# Imports the common source set needs that the Android original got implicitly.
+EXTRA_IMPORTS = {
+    "@Volatile": "import kotlin.concurrent.Volatile",
 }
 LEFTOVER = re.compile(r"^import (java|javax|android|androidx|org\.(?!jetbrains)|com\.squareup|net\.)[\w.]*", re.M)
 NL = chr(10)
@@ -55,6 +66,7 @@ def port(text: str) -> str:
         for token, name in AUTO_IMPORTS.items()
         if token in text and f"import {COMPAT}.util.{name}" not in text
     ]
+    needed += [imp for token, imp in EXTRA_IMPORTS.items() if token in text and imp not in text]
     if needed:
         text = re.sub(
             r"^(package [\w.]+)" + NL,
@@ -78,7 +90,8 @@ def main() -> None:
     all_files = sorted(app_root.rglob("*.kt"))
     chosen = [
         p for p in all_files
-        if any(fnmatch.fnmatch(p.relative_to(app_root).as_posix(), g) for g in globs)
+        if p.relative_to(app_root).as_posix() not in MANUAL
+        and any(fnmatch.fnmatch(p.relative_to(app_root).as_posix(), g) for g in globs)
     ]
     for path in chosen:
         rel = path.relative_to(src_root)

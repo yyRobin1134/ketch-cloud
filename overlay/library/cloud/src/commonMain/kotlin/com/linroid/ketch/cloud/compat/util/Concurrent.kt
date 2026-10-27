@@ -37,17 +37,25 @@ class ConcurrentHashMap<K, V> : MutableMap<K, V> {
   override val keys: MutableSet<K> get() = syncLock(lock) { LinkedHashSet(inner.keys) }
   override val values: MutableCollection<V> get() = syncLock(lock) { ArrayList(inner.values) }
   override val entries: MutableSet<MutableMap.MutableEntry<K, V>>
-    get() = syncLock(lock) { LinkedHashSet(inner.entries.map { java8Entry(it.key, it.value) }) }
+    get() = syncLock(lock) { inner.entries.mapTo(LinkedHashSet()) { Entry(it.key, it.value, this) } }
 
-  private fun java8Entry(key: K, value: V): MutableMap.MutableEntry<K, V> =
-    object : MutableMap.MutableEntry<K, V> {
-      override val key: K = key
-      override var value: V = value
-      override fun setValue(newValue: V): V = value.also { put(key, newValue); value = newValue }
-      override fun equals(other: Any?): Boolean =
-        other is Map.Entry<*, *> && other.key == key && other.value == value
-      override fun hashCode(): Int = (key?.hashCode() ?: 0) xor (value?.hashCode() ?: 0)
+  private class Entry<K, V>(
+    override val key: K,
+    override var value: V,
+    private val owner: ConcurrentHashMap<K, V>,
+  ) : MutableMap.MutableEntry<K, V> {
+    override fun setValue(newValue: V): V {
+      val old = value
+      value = newValue
+      owner.put(key, newValue)
+      return old
     }
+
+    override fun equals(other: Any?): Boolean =
+      other is Map.Entry<*, *> && other.key == key && other.value == value
+
+    override fun hashCode(): Int = (key?.hashCode() ?: 0) xor (value?.hashCode() ?: 0)
+  }
 }
 
 /** `java.util.concurrent.ThreadLocalRandom.current()`. */

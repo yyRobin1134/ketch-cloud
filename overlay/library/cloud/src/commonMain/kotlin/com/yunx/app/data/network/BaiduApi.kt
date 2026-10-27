@@ -19,6 +19,8 @@
 package com.yunx.app.data.network
 
 import com.linroid.ketch.cloud.compat.util.currentTimeMillis
+import com.linroid.ketch.cloud.compat.util.IO
+import kotlin.concurrent.Volatile
 
 import com.yunx.app.data.network.model.QuotaInfo
 import com.yunx.app.data.network.model.ShareFile
