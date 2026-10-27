@@ -94,7 +94,7 @@ jobs:
         run: |
           ./gradlew :library:cloud:iosSimulatorArm64Test --no-daemon --continue -PprebuiltWebDir=build/no-web-app --tests 'com.linroid.ketch.cloud.CloudServiceTest' && exit 0
           echo "CloudServiceTest crashed; running one test at a time"
-          for t in a01Context a02Prefs a03Database a04Http b01Quark b02Uc b03Xunlei b04Baidu b05C139 b06Pan123 b07Pan115 b08GuangYa b09ILanzou b10Lanzou b11GitHub; do
+          for t in a01Context a02Prefs a03Database a04Http b01Quark b02Uc b03Xunlei b04Baidu b05C139 b06Pan123 b07Pan115 b08GuangYa b09ILanzou b10Lanzou b11GitHub c01Accounts c02Accounts2 c03GuangyaProvider c04Resolvers c05Video c06XunleiResolver; do
             if ./gradlew :library:cloud:iosSimulatorArm64Test --tests "com.linroid.ketch.cloud.BisectTest.$t" -PprebuiltWebDir=build/no-web-app > "/tmp/$t.log" 2>&1; then
               echo "BISECT PASS $t"
             else
