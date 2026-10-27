@@ -107,6 +107,8 @@ jobs:
         run: |
           version=${TAG#v}
           ipa="/tmp/ketch-uc-ios-$version.ipa"
+          # A forced rebuild of the same upstream tag replaces its release.
+          gh release delete "uc-$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
           gh release create "uc-$TAG" "$ipa" --repo "$GITHUB_REPOSITORY" \
             --title "Ketch UC $TAG" \
             --notes "Ketch $TAG with the UC browser patch. Unsigned IPA for SideStore / LiveContainer."
