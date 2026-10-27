@@ -1,0 +1,493 @@
+diff --git a/app/ios/CloudView.swift b/app/ios/CloudView.swift
+new file mode 100644
+index 0000000..738b2e6
+--- /dev/null
++++ b/app/ios/CloudView.swift
+@@ -0,0 +1,331 @@
++import SwiftUI
++import WebKit
++import KetchApp
++
++extension CloudPlatform: Identifiable {}
++
++struct CloudRow: Identifiable {
++  let id = UUID()
++  let entry: CloudEntry
++}
++
++/// Opens share links through the ported YunX resolvers and hands the resolved files, with the
++/// headers their hosts demand, to Ketch's add sheet.
++@MainActor
++final class CloudModel: ObservableObject {
++  let service = CloudService()
++  let incoming: IncomingDownloads
++
++  @Published var input = ""
++  @Published var password = ""
++  @Published var status: String?
++  @Published var busy = false
++  @Published var share: CloudShare?
++  @Published var rows: [CloudRow] = []
++  @Published var selected: Set<UUID> = []
++  @Published var loggedIn: Set<String> = []
++  private var history: [[CloudRow]] = []
++
++  init(incoming: IncomingDownloads) {
++    self.incoming = incoming
++    Task { await refreshLogin() }
++  }
++
++  var canGoUp: Bool { !history.isEmpty }
++
++  func refreshLogin() async {
++    do {
++      let ids = try await service.loggedInPlatformIds()
++      loggedIn = Set(ids)
++    } catch {
++      loggedIn = []
++    }
++  }
++
++  func open() {
++    let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
++    guard !text.isEmpty else { return }
++    busy = true
++    status = nil
++    Task {
++      defer { busy = false }
++      do {
++        let result = try await service.openShare(text: text, password: password.isEmpty ? nil : password)
++        if let opened = result.share {
++          share = opened
++          history = []
++          rows = opened.entries.map { CloudRow(entry: $0) }
++          selected = []
++        } else {
++          status = result.error ?? "Could not open the share."
++        }
++      } catch {
++        status = error.localizedDescription
++      }
++    }
++  }
++
++  func enter(_ row: CloudRow) {
++    guard let share else { return }
++    busy = true
++    status = nil
++    Task {
++      defer { busy = false }
++      do {
++        let listing = try await service.listDirectory(share: share, directory: row.entry)
++        if let message = listing.error {
++          status = message
++        } else {
++          history.append(rows)
++          rows = listing.entries.map { CloudRow(entry: $0) }
++          selected = []
++        }
++      } catch {
++        status = error.localizedDescription
++      }
++    }
++  }
++
++  func goUp() {
++    guard let previous = history.popLast() else { return }
++    rows = previous
++    selected = []
++  }
++
++  func send(_ chosen: [CloudRow]) {
++    guard let share else { return }
++    busy = true
++    status = nil
++    Task {
++      defer { busy = false }
++      var sent = 0
++      for row in chosen where !row.entry.isDirectory {
++        do {
++          let resolved = try await service.resolveFile(share: share, file: row.entry)
++          guard let link = resolved.link else {
++            status = resolved.error ?? "Could not get a download link."
++            continue
++          }
++          incoming.offerCloudDownload(url: link.url, fileName: link.fileName, headers: link.headers)
++          sent += 1
++        } catch {
++          status = error.localizedDescription
++        }
++      }
++      if sent > 0 {
++        status = "Sent \(sent) file(s) to Ketch."
++      }
++    }
++  }
++
++  func toggle(_ row: CloudRow) {
++    if selected.contains(row.id) {
++      selected.remove(row.id)
++    } else {
++      selected.insert(row.id)
++    }
++  }
++
++  func logout(_ platform: CloudPlatform) {
++    Task {
++      try? await service.logout(platformId: platform.id)
++      await refreshLogin()
++    }
++  }
++}
++
++struct CloudView: View {
++  @Environment(\.dismiss) private var dismiss
++  @StateObject private var model: CloudModel
++  @State private var loginPlatform: CloudPlatform?
++
++  init(incoming: IncomingDownloads) {
++    _model = StateObject(wrappedValue: CloudModel(incoming: incoming))
++  }
++
++  var body: some View {
++    NavigationView {
++      List {
++        Section(header: Text("Share link")) {
++          TextField("Paste a share link or message", text: $model.input)
++            .textInputAutocapitalization(.never)
++            .autocorrectionDisabled()
++          TextField("Access code (optional)", text: $model.password)
++            .textInputAutocapitalization(.never)
++            .autocorrectionDisabled()
++          Button("Open") { model.open() }
++            .disabled(model.busy || model.input.isEmpty)
++        }
++
++        if let status = model.status {
++          Section {
++            Text(status).font(.footnote)
++          }
++        }
++
++        if let share = model.share {
++          Section(header: Text(share.title)) {
++            if model.canGoUp {
++              Button("Back") { model.goUp() }
++            }
++            ForEach(model.rows) { row in
++              Button {
++                if row.entry.isDirectory {
++                  model.enter(row)
++                } else {
++                  model.toggle(row)
++                }
++              } label: {
++                HStack {
++                  Image(systemName: row.entry.isDirectory
++                    ? "folder"
++                    : (model.selected.contains(row.id) ? "checkmark.circle.fill" : "circle"))
++                  Text(row.entry.name)
++                  Spacer()
++                  if !row.entry.isDirectory {
++                    Text(ByteCountFormatter.string(fromByteCount: row.entry.size, countStyle: .file))
++                      .font(.footnote)
++                      .foregroundColor(.secondary)
++                  }
++                }
++              }
++              .foregroundColor(.primary)
++            }
++            Button("Send selected to Ketch") {
++              model.send(model.rows.filter { model.selected.contains($0.id) })
++            }
++            .disabled(model.busy || model.selected.isEmpty)
++          }
++        }
++
++        Section(header: Text("Accounts")) {
++          ForEach(model.service.platforms(), id: \.id) { platform in
++            HStack {
++              Text(platform.name)
++              Spacer()
++              if model.loggedIn.contains(platform.id) {
++                Button("Sign out") { model.logout(platform) }
++              } else if platform.loginUrl != nil {
++                Button("Sign in") { loginPlatform = platform }
++              } else {
++                Text("Not available yet").font(.footnote).foregroundColor(.secondary)
++              }
++            }
++          }
++        }
++      }
++      .navigationTitle("Cloud")
++      .toolbar {
++        ToolbarItem(placement: .navigationBarTrailing) {
++          Button("Done") { dismiss() }
++        }
++      }
++    }
++    .navigationViewStyle(.stack)
++    .sheet(item: $loginPlatform) { platform in
++      CloudLoginView(platform: platform, service: model.service) {
++        Task { await model.refreshLogin() }
++      }
++    }
++  }
++}
++
++@MainActor
++final class CloudLoginSession: NSObject, ObservableObject {
++  @Published var status: String?
++  let webView: WKWebView
++  private let platform: CloudPlatform
++  private let service: CloudService
++
++  init(platform: CloudPlatform, service: CloudService) {
++    let config = WKWebViewConfiguration()
++    config.websiteDataStore = WKWebsiteDataStore.default()
++    let view = WKWebView(frame: .zero, configuration: config)
++    // Ask for the desktop site, which is the layout these sign-in pages are built around.
++    view.customUserAgent =
++      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
++    self.platform = platform
++    self.service = service
++    self.webView = view
++    super.init()
++    if let address = platform.loginUrl, let url = URL(string: address) {
++      view.load(URLRequest(url: url))
++    }
++  }
++
++  func save(done: @escaping () -> Void) {
++    let hosts: [String] = platform.cookieHosts
++    let needed: [String] = platform.requiredCookies
++    webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
++      let mine = cookies.filter { cookie in
++        let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
++        let hostMatches = hosts.contains { domain == $0 || domain.hasSuffix("." + $0) }
++        let alive = cookie.expiresDate.map { $0 > Date() } ?? true
++        return hostMatches && alive
++      }
++      let complete = !mine.isEmpty && needed.allSatisfy { name in mine.contains { $0.name == name } }
++      let header = mine.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
++      Task { @MainActor in
++        guard let self else { return }
++        guard complete else {
++          self.status = "Not signed in yet. Finish signing in, then tap Save."
++          return
++        }
++        do {
++          let result = try await self.service.saveLogin(platformId: self.platform.id, cookie: header)
++          if result.ok {
++            done()
++          } else {
++            self.status = "The site did not accept this login."
++          }
++        } catch {
++          self.status = error.localizedDescription
++        }
++      }
++    }
++  }
++}
++
++private struct CloudWebHost: UIViewRepresentable {
++  let webView: WKWebView
++
++  func makeUIView(context: Context) -> WKWebView { webView }
++  func updateUIView(_ uiView: WKWebView, context: Context) {}
++}
++
++struct CloudLoginView: View {
++  @Environment(\.dismiss) private var dismiss
++  @StateObject private var session: CloudLoginSession
++  private let onSaved: () -> Void
++
++  init(platform: CloudPlatform, service: CloudService, onSaved: @escaping () -> Void) {
++    _session = StateObject(wrappedValue: CloudLoginSession(platform: platform, service: service))
++    self.onSaved = onSaved
++  }
++
++  var body: some View {
++    NavigationView {
++      VStack(spacing: 8) {
++        if let status = session.status {
++          Text(status).font(.footnote).padding(.horizontal)
++        }
++        CloudWebHost(webView: session.webView)
++      }
++      .navigationBarTitleDisplayMode(.inline)
++      .toolbar {
++        ToolbarItem(placement: .navigationBarLeading) {
++          Button("Cancel") { dismiss() }
++        }
++        ToolbarItem(placement: .navigationBarTrailing) {
++          Button("Save login") {
++            session.save {
++              onSaved()
++              dismiss()
++            }
++          }
++        }
++      }
++    }
++    .navigationViewStyle(.stack)
++  }
++}
+diff --git a/app/ios/ContentView.swift b/app/ios/ContentView.swift
+index 9d902d5..084658b 100644
+--- a/app/ios/ContentView.swift
++++ b/app/ios/ContentView.swift
+@@ -16,23 +16,38 @@ struct ComposeView: UIViewControllerRepresentable {
+ struct ContentView: View {
+   let incoming: IncomingDownloads
+   @State private var showingUCBrowser = false
++  @State private var showingCloud = false
+ 
+   var body: some View {
+     ZStack(alignment: .topTrailing) {
+       // Compose manages its own insets.
+       ComposeView(incoming: incoming)
+         .ignoresSafeArea()
+-      Button {
+-        showingUCBrowser = true
+-      } label: {
+-        Label("Cloud", systemImage: "globe")
+-          .padding(.horizontal, 14)
+-          .padding(.vertical, 10)
+-          .background(.regularMaterial, in: Capsule())
++      HStack(spacing: 8) {
++        Button {
++          showingUCBrowser = true
++        } label: {
++          Label("Web", systemImage: "globe")
++            .padding(.horizontal, 14)
++            .padding(.vertical, 10)
++            .background(.regularMaterial, in: Capsule())
++        }
++        .accessibilityLabel("Open cloud login browser")
++        Button {
++          showingCloud = true
++        } label: {
++          Label("Cloud", systemImage: "icloud.and.arrow.down")
++            .padding(.horizontal, 14)
++            .padding(.vertical, 10)
++            .background(.regularMaterial, in: Capsule())
++        }
++        .accessibilityLabel("Open cloud drives")
+       }
+       .padding(.top, 10)
+       .padding(.trailing, 12)
+-      .accessibilityLabel("Open cloud login browser")
++    }
++    .sheet(isPresented: $showingCloud) {
++      CloudView(incoming: incoming)
+     }
+     .sheet(isPresented: $showingUCBrowser) {
+       UCBrowserView(incoming: incoming)
+diff --git a/app/ios/Ketch.xcodeproj/project.pbxproj b/app/ios/Ketch.xcodeproj/project.pbxproj
+index f8feed5..310b8f1 100644
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -10,6 +10,7 @@
+ 		A001 /* iOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B001 /* iOSApp.swift */; };
+ 		A002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002 /* ContentView.swift */; };
+ 		A005 /* UCBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B015 /* UCBrowserView.swift */; };
++		A006 /* CloudView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016 /* CloudView.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+ 		A004 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = D004 /* InfoPlist.strings */; };
+ /* End PBXBuildFile section */
+@@ -19,6 +20,7 @@
+ 		B001 /* iOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iOSApp.swift; sourceTree = "<group>"; };
+ 		B002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+ 		B015 /* UCBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UCBrowserView.swift; sourceTree = "<group>"; };
++		B016 /* CloudView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudView.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		B004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+ 		B005 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+@@ -61,6 +63,7 @@
+ 				B001 /* iOSApp.swift */,
+ 				B002 /* ContentView.swift */,
+ 				B015 /* UCBrowserView.swift */,
++				B016 /* CloudView.swift */,
+ 			);
+ 			name = Sources;
+ 			sourceTree = "<group>";
+@@ -192,6 +195,7 @@
+ 				A001 /* iOSApp.swift in Sources */,
+ 				A002 /* ContentView.swift in Sources */,
+ 				A005 /* UCBrowserView.swift in Sources */,
++				A006 /* CloudView.swift in Sources */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
+diff --git a/app/shared/build.gradle.kts b/app/shared/build.gradle.kts
+index d054563..a674161 100644
+--- a/app/shared/build.gradle.kts
++++ b/app/shared/build.gradle.kts
+@@ -38,6 +38,8 @@ kotlin {
+     iosTarget.binaries.framework {
+       baseName = "KetchApp"
+       isStatic = true
++      // The cloud-drive service the SwiftUI screens call.
++      export(projects.library.cloud)
+     }
+   }
+ 
+@@ -143,6 +145,7 @@ kotlin {
+       implementation(projects.library.torrent)
+       implementation(projects.library.sqlite)
+       implementation(libs.ktor.client.darwin)
++      api(projects.library.cloud)
+     }
+     jvmMain.dependencies {
+       implementation(projects.library.core)
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
+index 27be166..049cdd5 100644
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
+@@ -636,7 +636,9 @@ class AppState(
+             } else {
+               // Authenticated browser downloads stay on-device, never sent to a paired server.
+               openIntake(IntakeRequest(
+-                seeds = links.urls.map { IntakeSeed(url = it, headers = links.headers) },
++                seeds = links.urls.map {
++                  IntakeSeed(url = it, fileName = links.fileName, headers = links.headers)
++                },
+                 targetDeviceId = LOCAL_DEVICE_ID,
+               ))
+             }
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+index 96bd6bb..21d022d 100644
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+@@ -58,6 +58,8 @@ sealed interface IncomingDownload {
+     val source: LinkSource,
+     /** Captured first-party headers for this download, never shared with unrelated hosts. */
+     val headers: Map<String, String> = emptyMap(),
++    /** Name to save the file as, when the source knows it (a resolved cloud-drive file). */
++    val fileName: String? = null,
+   ) : IncomingDownload {
+     override val label: String
+       get() = urls.singleOrNull() ?: "${urls.size} links"
+@@ -204,6 +206,19 @@ class IncomingDownloads {
+     offer(IncomingDownload.Links(listOf(trimmed), LinkSource.Share, headers))
+   }
+ 
++  /**
++   * Receive a download resolved from a cloud-drive share: the direct URL, the file name, and the
++   * headers that file's host demands (cookie, referer, user agent). It stays on this device, like
++   * any download that carries credentials.
++   */
++  fun offerCloudDownload(url: String, fileName: String?, headers: Map<String, String>) {
++    val trimmed = url.trim()
++    if (!trimmed.startsWith("https://", ignoreCase = true) && !trimmed.startsWith("http://", ignoreCase = true)) return
++    // Header text must not carry control characters, which would let a value inject more headers.
++    val safe = headers.filter { (k, v) -> k.none { c -> c.code < 32 } && v.none { c -> c.code < 32 } }
++    offer(IncomingDownload.Links(listOf(trimmed), LinkSource.Share, safe, fileName?.takeIf { it.isNotBlank() }))
++  }
++
+   /**
+    * Offers one link the app was opened with, by its scheme: a pairing link ([isPairingLink]) as
+    * [IncomingDownload.Pairing], and a link Ketch downloads, such as a `magnet:` link, as

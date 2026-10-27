@@ -90,12 +90,27 @@ class CloudLink(
   val headers: Map<String, String>,
 )
 
+/** Outcome of [CloudService.openShare]: a share, or a message to show. */
+class CloudOpened(val share: CloudShare?, val error: String?)
+
+/** Outcome of [CloudService.listDirectory]. */
+class CloudListing(val entries: List<CloudEntry>, val error: String?)
+
+/** Outcome of [CloudService.saveLogin]. */
+class CloudSaveResult(val ok: Boolean)
+
+/** Outcome of [CloudService.resolveFile]. */
+class CloudResolved(val link: CloudLink?, val error: String?)
+
 /**
  * The entry point the iOS app talks to: open a share link, browse it, and turn a file into a
  * direct download link with the headers Ketch must send. Built from the ported YunX repositories;
  * every platform goes through the same [ShareResolveRepository] contract.
  */
-class CloudService(context: Context = Context.default) {
+class CloudService(context: Context) {
+  /** The form Swift uses: the constructor above has no default argument there. */
+  constructor() : this(Context.default)
+
   private val db = AppDatabase.get(context)
 
   private val quarkApi = QuarkApi()
@@ -345,4 +360,41 @@ class CloudService(context: Context = Context.default) {
       "Referer" to QuarkConstants.DOWNLOAD_REFERER,
     )
   }
+
+  // Swift gets Kotlin exceptions as opaque NSErrors, so these wrappers carry the message instead.
+
+  suspend fun openShare(text: String, password: String?): CloudOpened = try {
+    CloudOpened(open(text, password), null)
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudOpened(null, e.message ?: "解析失败")
+  }
+
+  suspend fun listDirectory(share: CloudShare, directory: CloudEntry): CloudListing = try {
+    CloudListing(list(share, directory), null)
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudListing(emptyList(), e.message ?: "读取目录失败")
+  }
+
+  suspend fun resolveFile(share: CloudShare, file: CloudEntry): CloudResolved = try {
+    CloudResolved(resolve(share, file), null)
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudResolved(null, e.message ?: "获取下载链接失败")
+  }
+
+  suspend fun saveLogin(platformId: String, cookie: String): CloudSaveResult = try {
+    CloudSaveResult(saveCookie(platformId, cookie))
+  } catch (e: CancellationException) {
+    throw e
+  } catch (e: Exception) {
+    CloudSaveResult(false)
+  }
+
+  /** Ids of the platforms that currently have a stored login. */
+  suspend fun loggedInPlatformIds(): List<String> = platformList.map { it.id }.filter { isLoggedIn(it) }
 }
