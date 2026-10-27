@@ -88,3 +88,7 @@ jobs:
       - name: Compile for iOS
         working-directory: ketch
         run: ./gradlew :library:cloud:compileKotlinIosArm64 :library:cloud:compileKotlinIosSimulatorArm64 --no-daemon -PprebuiltWebDir=build/no-web-app
+
+      - name: Run the tests in the iOS simulator
+        working-directory: ketch
+        run: ./gradlew :library:cloud:iosSimulatorArm64Test --no-daemon --continue -PprebuiltWebDir=build/no-web-app
