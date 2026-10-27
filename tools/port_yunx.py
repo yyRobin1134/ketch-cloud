@@ -63,6 +63,7 @@ BODY_MAP = [
     (r"\bSystem\.nanoTime\(\)", "nanoTime()"),
     (r"\bSystem\.arraycopy\(", "arraycopy("),
     (r"\bThread\.sleep\(", "sleepBlocking("),
+    (r"\bMath\.random\(\)", "kotlin.random.Random.nextDouble()"),
     (r"\.toByteArray\((?:Charsets|StandardCharsets)\.UTF_8\)", ".encodeToByteArray()"),
     (r"\bjava\.net\.URLDecoder\b", f"{COMPAT}.util.URLDecoder"),
     (r"\bjava\.io\.IOException\b", f"{COMPAT}.http.IOException"),

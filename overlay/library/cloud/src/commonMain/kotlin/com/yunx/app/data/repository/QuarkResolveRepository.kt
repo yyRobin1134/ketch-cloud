@@ -132,7 +132,7 @@ class QuarkResolveRepository(private val api: QuarkApi) : ShareResolveRepository
         val baseDir = ensureTempDir(cookie).getOrThrow()
 
         // 唯一临时子目录：to_pdir_fid 每次不同 → 绕开夸克去重
-        val subDirName = "tr_${nanoTime()}_${(Math.random() * 1_000_000).toInt()}"
+        val subDirName = "tr_${nanoTime()}_${(kotlin.random.Random.nextDouble() * 1_000_000).toInt()}"
         val subDirFid = api.createFolder(subDirName, baseDir, cookie)
             ?: throw IllegalStateException("创建临时转存目录失败")
 
