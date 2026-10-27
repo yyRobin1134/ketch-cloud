@@ -642,6 +642,19 @@ class CloudService(context: Context) {
     CloudSaveResult(false)
   }
 
+  /**
+   * Whether pasted or clipboard text holds something this service can open: a drive share link,
+   * a video link or a GitHub repository. The bare-text commands (Xunlei, Quark) are left out on
+   * purpose, as in YunX: any Chinese word would look like one.
+   */
+  fun isSupportedLink(text: String): Boolean {
+    if (text.isBlank() || text.length > 2000) return false
+    if (ShareLinkParser.parse(text) != null) return true
+    if (VideoLinkParser.parse(text) != null) return true
+    val git = GitHubLinkParser.parse(text)
+    return git is GitHubLinkType.Repository
+  }
+
   /** Ids of the platforms that currently have a stored login. */
   suspend fun loggedInPlatformIds(): List<String> = platformList.map { it.id }.filter { isLoggedIn(it) }
 }

@@ -1,0 +1,157 @@
+--- a/app/ios/CloudView.swift
++++ b/app/ios/CloudView.swift
+@@ -1,4 +1,5 @@
+ import SwiftUI
++import UIKit
+ import WebKit
+ import KetchApp
+ 
+@@ -11,10 +12,23 @@
+ 
+ /// Opens share links through the ported YunX resolvers and hands the resolved files, with the
+ /// headers their hosts demand, to Ketch's add sheet.
++enum CloudServices {
++  private static let loader = WebPageLoaderImpl()
++
++  /// One service for the whole app, so the clipboard check and the Cloud screen share its logins.
++  static let shared: CloudService = {
++    let service = CloudService()
++    service.installWebLoader(loader: loader)
++    return service
++  }()
++}
++
+ @MainActor
+ final class CloudModel: ObservableObject {
+-  let service = CloudService()
++  let service = CloudServices.shared
+   let incoming: IncomingDownloads
++  private let autoOpen: Bool
++  private var started = false
+ 
+   @Published var input = ""
+   @Published var password = ""
+@@ -26,12 +40,29 @@
+   @Published var loggedIn: Set<String> = []
+   private var history: [[CloudRow]] = []
+ 
+-  init(incoming: IncomingDownloads) {
++  init(incoming: IncomingDownloads, initialText: String?) {
+     self.incoming = incoming
+-    service.installWebLoader(loader: WebPageLoaderImpl())
++    if let initialText {
++      input = initialText
++      autoOpen = true
++    } else {
++      autoOpen = false
++    }
+     Task { await refreshLogin() }
+   }
+ 
++  /// Called when the screen appears: opens a link handed over from the clipboard banner, or else
++  /// fills the field with a supported link found on the clipboard, as YunX suggests one.
++  func start() {
++    guard !started else { return }
++    started = true
++    if autoOpen {
++      open()
++    } else if input.isEmpty, let text = UIPasteboard.general.string, service.isSupportedLink(text: text) {
++      input = text
++    }
++  }
++
+   var canGoUp: Bool { !history.isEmpty }
+ 
+   func refreshLogin() async {
+@@ -141,8 +172,8 @@
+   @State private var loginPlatform: CloudPlatform?
+   @State private var passwordPlatform: CloudPlatform?
+ 
+-  init(incoming: IncomingDownloads) {
+-    _model = StateObject(wrappedValue: CloudModel(incoming: incoming))
++  init(incoming: IncomingDownloads, initialText: String? = nil) {
++    _model = StateObject(wrappedValue: CloudModel(incoming: incoming, initialText: initialText))
+   }
+ 
+   var body: some View {
+@@ -220,6 +251,7 @@
+         }
+       }
+       .navigationTitle("Cloud")
++      .onAppear { model.start() }
+       .toolbar {
+         ToolbarItem(placement: .navigationBarTrailing) {
+           Button("Done") { dismiss() }
+--- a/app/ios/ContentView.swift
++++ b/app/ios/ContentView.swift
+@@ -17,12 +17,51 @@
+   let incoming: IncomingDownloads
+   @State private var showingUCBrowser = false
+   @State private var showingCloud = false
++  @State private var cloudSeed: String?
++  @State private var clipboardLink: String?
++  @State private var handledClipboard: String?
++  @Environment(\.scenePhase) private var scenePhase
++
++  /// Looks for a drive, video or GitHub link on the clipboard, as YunX does when it comes to the
++  /// front, and offers to parse it. Each copied text is offered once.
++  private func checkClipboard() {
++    guard !showingCloud, UIPasteboard.general.hasStrings,
++          let text = UIPasteboard.general.string,
++          text != handledClipboard,
++          CloudServices.shared.isSupportedLink(text: text) else { return }
++    clipboardLink = text
++  }
+ 
+   var body: some View {
+     ZStack(alignment: .bottomLeading) {
+       // Compose manages its own insets.
+       ComposeView(incoming: incoming)
+         .ignoresSafeArea()
++      VStack(alignment: .leading, spacing: 14) {
++        if let link = clipboardLink {
++          HStack(spacing: 10) {
++            Image(systemName: "link")
++            Text("Link on the clipboard")
++              .font(.footnote)
++            Button("Parse") {
++              handledClipboard = link
++              cloudSeed = link
++              clipboardLink = nil
++              showingCloud = true
++            }
++            .font(.footnote.bold())
++            Button {
++              handledClipboard = link
++              clipboardLink = nil
++            } label: {
++              Image(systemName: "xmark")
++            }
++            .accessibilityLabel("Dismiss")
++          }
++          .padding(.horizontal, 14)
++          .padding(.vertical, 10)
++          .background(.regularMaterial, in: Capsule())
++        }
+       HStack(spacing: 8) {
+         Button {
+           showingUCBrowser = true
+@@ -43,11 +82,16 @@
+         }
+         .accessibilityLabel("Open cloud drives")
+       }
++      }
+       .padding(.bottom, 84)
+       .padding(.leading, 16)
+     }
+-    .sheet(isPresented: $showingCloud) {
+-      CloudView(incoming: incoming)
++    .onChange(of: scenePhase) { phase in
++      if phase == .active { checkClipboard() }
++    }
++    .onAppear { checkClipboard() }
++    .sheet(isPresented: $showingCloud, onDismiss: { cloudSeed = nil }) {
++      CloudView(incoming: incoming, initialText: cloudSeed)
+     }
+     .sheet(isPresented: $showingUCBrowser) {
+       UCBrowserView(incoming: incoming)
