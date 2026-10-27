@@ -21,6 +21,7 @@ import com.linroid.ketch.cloud.compat.util.URLEncoder
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -134,7 +135,7 @@ class HttpTest {
         MockEngine { request ->
           seenUa = request.headers[HttpHeaders.UserAgent]
           seenType = request.body.contentType?.toString()
-          seenBody = (request.body as io.ktor.http.content.ByteArrayContent).bytes().decodeToString()
+          seenBody = request.body.toByteArray().decodeToString()
           respond("""{"ok":1}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json; charset=utf-8"))
         },
       ) { followRedirects = false },

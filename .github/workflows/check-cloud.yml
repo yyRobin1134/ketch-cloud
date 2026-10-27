@@ -48,4 +48,4 @@ jobs:
 
       - name: Run tests
         working-directory: ketch
-        run: ./gradlew :library:cloud:jvmTest --no-daemon --stacktrace -PprebuiltWebDir=build/no-web-app
+        run: ./gradlew :library:cloud:compileCommonMainKotlinMetadata :library:cloud:jvmTest --no-daemon --continue -PprebuiltWebDir=build/no-web-app
