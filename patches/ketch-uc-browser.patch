@@ -1,0 +1,329 @@
+diff --git a/app/ios/ContentView.swift b/app/ios/ContentView.swift
+--- a/app/ios/ContentView.swift
++++ b/app/ios/ContentView.swift
+@@ -15,11 +15,27 @@
+ 
+ struct ContentView: View {
+   let incoming: IncomingDownloads
++  @State private var showingUCBrowser = false
+ 
+   var body: some View {
+-    // Compose pads for the safe area itself (WindowInsets.safeDrawing); inside SwiftUI's safe
+-    // area it would get the bars' height twice, over a blank band where the bars are.
+-    ComposeView(incoming: incoming)
+-      .ignoresSafeArea()
++    ZStack(alignment: .topTrailing) {
++      // Compose manages its own insets.
++      ComposeView(incoming: incoming)
++        .ignoresSafeArea()
++      Button {
++        showingUCBrowser = true
++      } label: {
++        Label("UC", systemImage: "globe")
++          .padding(.horizontal, 14)
++          .padding(.vertical, 10)
++          .background(.regularMaterial, in: Capsule())
++      }
++      .padding(.top, 10)
++      .padding(.trailing, 12)
++      .accessibilityLabel("Open UC browser")
++    }
++    .sheet(isPresented: $showingUCBrowser) {
++      UCBrowserView(incoming: incoming)
++    }
+   }
+ }
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IncomingDownloads.kt
+@@ -56,4 +56,9 @@
+-  data class Links(val urls: List<String>, val source: LinkSource) : IncomingDownload {
++  data class Links(
++    val urls: List<String>,
++    val source: LinkSource,
++    /** Captured first-party headers for this download, never shared with unrelated hosts. */
++    val headers: Map<String, String> = emptyMap(),
++  ) : IncomingDownload {
+     override val label: String
+       get() = urls.singleOrNull() ?: "${urls.size} links"
+   }
+@@ -166,6 +171,36 @@
+     val links = urls.map { it.trim() }.filter { it.isNotEmpty() }
+     if (links.isNotEmpty()) offer(IncomingDownload.Links(links, source))
+   }
++
++  /**
++   * Receive a user-selected UC HTTPS download from the iOS in-app WebKit browser. Swift
++   * collects only cookies matching the target host and path, rather than forwarding the
++   * entire browser cookie jar. The intake is kept on the local Ketch instance.
++   *
++   * Cookies become ordinary download request headers and are therefore saved with that task.
++   * This does not grant access beyond the user's valid UC session.
++   */
++  fun offerBrowserDownload(
++    url: String,
++    referer: String,
++    cookieHeader: String,
++    userAgent: String,
++  ) {
++    val trimmed = url.trim()
++    val match = Regex("^https://([^/?#:]+)(?::[0-9]+)?(?:[/?#]|$)", RegexOption.IGNORE_CASE)
++      .find(trimmed) ?: return
++    val host = match.groupValues[1].lowercase()
++    if (host != "uc.cn" && !host.endsWith(".uc.cn")) return
++    fun header(value: String) = value.trim().takeIf { text ->
++      text.isNotBlank() && text.none { it == '\r' || it == '\n' || it == '\u0000' }
++    }
++    val headers = buildMap {
++      header(referer)?.takeIf { it.startsWith("https://") }?.let { put("Referer", it) }
++      header(cookieHeader)?.let { put("Cookie", it) }
++      header(userAgent)?.let { put("User-Agent", it) }
++    }
++    offer(IncomingDownload.Links(listOf(trimmed), LinkSource.Share, headers))
++  }
+ 
+   /**
+    * Offers one link the app was opened with, by its scheme: a pairing link ([isPairingLink]) as
+diff --git a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/AppState.kt
+@@ -650,4 +650,12 @@
+           links != null -> {
+             openedLinks = links
+-            openIntake(IntakeRequest(text = links.urls.joinToString("\n")))
++            if (links.headers.isEmpty()) {
++              openIntake(IntakeRequest(text = links.urls.joinToString("\n")))
++            } else {
++              // Authenticated browser downloads stay on-device, never sent to a paired server.
++              openIntake(IntakeRequest(
++                seeds = links.urls.map { IntakeSeed(url = it, headers = links.headers) },
++                targetDeviceId = LOCAL_DEVICE_ID,
++              ))
++            }
+           }
+diff --git a/app/ios/Ketch.xcodeproj/project.pbxproj b/app/ios/Ketch.xcodeproj/project.pbxproj
+--- a/app/ios/Ketch.xcodeproj/project.pbxproj
++++ b/app/ios/Ketch.xcodeproj/project.pbxproj
+@@ -11,2 +11,3 @@
+ 		A002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B002 /* ContentView.swift */; };
++		A005 /* UCBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B015 /* UCBrowserView.swift */; };
+ 		A003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B004 /* Assets.xcassets */; };
+@@ -19,2 +20,3 @@
+ 		B002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
++		B015 /* UCBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UCBrowserView.swift; sourceTree = "<group>"; };
+ 		B003 /* Ketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+@@ -59,3 +61,4 @@
+ 				B001 /* iOSApp.swift */,
+ 				B002 /* ContentView.swift */,
++				B015 /* UCBrowserView.swift */,
+ 			);
+@@ -189,3 +192,4 @@
+ 				A001 /* iOSApp.swift in Sources */,
+ 				A002 /* ContentView.swift in Sources */,
++				A005 /* UCBrowserView.swift in Sources */,
+ 			);
+diff --git a/app/ios/UCBrowserView.swift b/app/ios/UCBrowserView.swift
+new file mode 100644
+--- /dev/null
++++ b/app/ios/UCBrowserView.swift
+@@ -0,0 +1,200 @@
++import SwiftUI
++import WebKit
++import KetchApp
++
++/// UC login remains in WebKit's persistent store across Ketch restarts.
++/// The store is Ketch's, not Safari's: the user logs in once inside this browser.
++struct UCBrowserView: View {
++  @Environment(\.dismiss) private var dismiss
++  @StateObject private var browser: UCBrowserSession
++
++  init(incoming: IncomingDownloads) {
++    _browser = StateObject(wrappedValue: UCBrowserSession(incoming: incoming))
++  }
++
++  var body: some View {
++    NavigationView {
++      VStack(spacing: 8) {
++        HStack(spacing: 10) {
++          TextField("URL", text: $browser.address)
++            .textContentType(.URL)
++            .keyboardType(.URL)
++            .textInputAutocapitalization(.never)
++            .autocorrectionDisabled()
++            .submitLabel(.go)
++            .onSubmit { browser.go() }
++          Button("Go") { browser.go() }
++          Button {
++            browser.sendCurrentToKetch()
++          } label: {
++            Label("Send to Ketch", systemImage: "arrow.down.circle")
++          }
++        }
++        .padding(.horizontal)
++        if let status = browser.status {
++          Text(status)
++            .font(.footnote)
++            .foregroundStyle(.secondary)
++            .padding(.horizontal)
++        }
++        UCWebView(webView: browser.webView)
++      }
++      .navigationTitle("UC browser")
++      .navigationBarTitleDisplayMode(.inline)
++      .toolbar {
++        ToolbarItem(placement: .navigationBarLeading) {
++          Button("Close") { dismiss() }
++        }
++        ToolbarItemGroup(placement: .bottomBar) {
++          Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
++          Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }
++          Spacer()
++          Button { browser.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
++        }
++      }
++    }
++    .navigationViewStyle(.stack)
++  }
++}
++
++private struct UCWebView: UIViewRepresentable {
++  let webView: WKWebView
++
++  func makeUIView(context: Context) -> WKWebView { webView }
++  func updateUIView(_ uiView: WKWebView, context: Context) {}
++}
++
++@MainActor
++private final class UCBrowserSession: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
++  @Published var address = "https://drive.uc.cn/"
++  @Published var status: String?
++  let webView: WKWebView
++  private let incoming: IncomingDownloads
++
++  init(incoming: IncomingDownloads) {
++    self.incoming = incoming
++    let config = WKWebViewConfiguration()
++    // Important: nonpersistent() would log out after closing the browser or app.
++    config.websiteDataStore = WKWebsiteDataStore.default()
++    self.webView = WKWebView(frame: .zero, configuration: config)
++    super.init()
++    webView.navigationDelegate = self
++    webView.uiDelegate = self
++    webView.load(URLRequest(url: URL(string: "https://drive.uc.cn/")!))
++  }
++
++  func go() {
++    let raw = address.trimmingCharacters(in: .whitespacesAndNewlines)
++    guard let url = URL(string: raw.contains("://") ? raw : "https://" + raw),
++          url.scheme?.lowercased() == "https",
++          url.host != nil else {
++      status = "Please enter a valid HTTPS URL."
++      return
++    }
++    status = nil
++    webView.load(URLRequest(url: url))
++  }
++
++  func sendCurrentToKetch() {
++    guard let url = webView.url else {
++      status = "No URL is open."
++      return
++    }
++    queue(url: url, from: webView.url)
++  }
++
++  private func ucHost(_ host: String?) -> Bool {
++    guard let host = host?.lowercased() else { return false }
++    return host == "uc.cn" || host.hasSuffix(".uc.cn")
++  }
++
++  private func queue(url: URL, from page: URL?) {
++    // Only allow UC HTTPS destinations. Never send this session's credentials to a third party.
++    guard url.scheme?.lowercased() == "https", ucHost(url.host) else {
++      status = "Only UC HTTPS download URLs can use UC login in this version."
++      return
++    }
++    let referer = page?.absoluteString ?? "https://drive.uc.cn/"
++    webView.evaluateJavaScript("navigator.userAgent") { [weak self] agent, _ in
++      guard let self else { return }
++      let userAgent = agent as? String ?? ""
++      self.webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
++        let applicable = cookies.filter { Self.applies($0, to: url) }
++        let cookieHeader = applicable.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
++        self.incoming.offerBrowserDownload(
++          url: url.absoluteString,
++          referer: referer,
++          cookieHeader: cookieHeader,
++          userAgent: userAgent
++        )
++        self.status = "Sent to Ketch. Check the download sheet to confirm."
++      }
++    }
++  }
++
++  private static func applies(_ cookie: HTTPCookie, to url: URL) -> Bool {
++    guard let host = url.host?.lowercased() else { return false }
++    let domain = cookie.domain.lowercased()
++    let bare = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
++    let domainOK = domain.hasPrefix(".")
++      ? (host == bare || host.hasSuffix("." + bare))
++      : host == bare
++    guard domainOK else { return false }
++    guard !cookie.isSecure || url.scheme == "https" else { return false }
++    if let expires = cookie.expiresDate, expires <= Date() { return false }
++    let requestPath = url.path.isEmpty ? "/" : url.path
++    let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
++    guard requestPath == cookiePath || requestPath.hasPrefix(
++      cookiePath.hasSuffix("/") ? cookiePath : cookiePath + "/"
++    ) else { return false }
++    // Prevent header injection even if website data becomes corrupted.
++    let unsafe = CharacterSet.newlines.union(.controlCharacters)
++    return cookie.name.rangeOfCharacter(from: unsafe) == nil &&
++      cookie.value.rangeOfCharacter(from: unsafe) == nil
++  }
++
++  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
++    if let url = webView.url { address = url.absoluteString }
++  }
++
++  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
++               withError error: Error) {
++    status = error.localizedDescription
++  }
++
++  // A normal top-level attachment is handed to the Ketch download sheet. This does not sniff
++  // fetch/XHR/blob downloads inside the page; those require a separate resource sniffer.
++  func webView(_ webView: WKWebView,
++               decidePolicyFor navigationResponse: WKNavigationResponse,
++               decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
++    guard navigationResponse.isForMainFrame,
++          let response = navigationResponse.response as? HTTPURLResponse,
++          (200...299).contains(response.statusCode),
++          let url = response.url,
++          ucHost(url.host) else {
++      decisionHandler(.allow)
++      return
++    }
++    let disposition = response.allHeaderFields.first {
++      String(describing: $0.key).lowercased() == "content-disposition"
++    }.map { String(describing: $0.value).lowercased() } ?? ""
++    if disposition.contains("attachment") ||
++       response.mimeType?.lowercased() == "application/octet-stream" {
++      decisionHandler(.cancel)
++      queue(url: url, from: webView.url)
++    } else {
++      decisionHandler(.allow)
++    }
++  }
++
++  // Some sites open the signed download URL in a new tab. Reuse this browser's cookie store.
++  func webView(_ webView: WKWebView,
++               createWebViewWith configuration: WKWebViewConfiguration,
++               for navigationAction: WKNavigationAction,
++               windowFeatures: WKWindowFeatures) -> WKWebView? {
++    if navigationAction.targetFrame == nil {
++      webView.load(navigationAction.request)
++    }
++    return nil
++  }
++}

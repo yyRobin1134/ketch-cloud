@@ -1,0 +1,123 @@
+name: Build Ketch UC
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream Ketch tag (blank = latest release)"
+        required: false
+      force:
+        description: "Rebuild even if this tag was already built"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      build: ${{ steps.t.outputs.build }}
+    steps:
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ]; then
+            tag=$(gh api repos/linroid/Ketch/releases --jq '[.[] | select(.tag_name | test("^v[0-9]")) | select(.prerelease | not)][0].tag_name')
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "uc-$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE" != "true" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: macos-26
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ours
+
+      - uses: actions/checkout@v4
+        with:
+          repository: linroid/Ketch
+          ref: ${{ needs.check.outputs.tag }}
+          path: ketch
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Apply UC patch
+        working-directory: ketch
+        run: |
+          git apply --check ../ours/patches/ketch-uc-browser.patch
+          git apply ../ours/patches/ketch-uc-browser.patch
+          # A distinct bundle id so this build installs next to upstream Ketch.
+          sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app;/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app.uc;/' app/ios/Ketch.xcodeproj/project.pbxproj
+          grep -n PRODUCT_BUNDLE_IDENTIFIER app/ios/Ketch.xcodeproj/project.pbxproj
+
+      - name: Build app
+        working-directory: ketch
+        run: |
+          version=${TAG#v}
+          ORG_GRADLE_PROJECT_VERSION_NAME=$version \
+          GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g \
+          xcodebuild build \
+            -project app/ios/Ketch.xcodeproj \
+            -target Ketch \
+            -configuration Release \
+            -sdk iphoneos \
+            MARKETING_VERSION=${version%%-*} \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=
+
+      - name: Package IPA
+        run: |
+          mkdir -p /tmp/ipa/Payload
+          cp -R ketch/app/ios/build/Release-iphoneos/Ketch.app /tmp/ipa/Payload/
+          cd /tmp/ipa
+          zip -qry "/tmp/ketch-uc-ios-${TAG#v}.ipa" Payload
+          ls -l /tmp/*.ipa
+
+      - name: Publish release and update source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${TAG#v}
+          ipa="/tmp/ketch-uc-ios-$version.ipa"
+          gh release create "uc-$TAG" "$ipa" --repo "$GITHUB_REPOSITORY" \
+            --title "Ketch UC $TAG" \
+            --notes "Ketch $TAG with the UC browser patch. Unsigned IPA for SideStore / LiveContainer."
+          cd ours
+          python3 scripts/update_source.py \
+            --version "${version%%-*}" \
+            --build "${{ github.run_number }}" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/uc-$TAG/ketch-uc-ios-$version.ipa" \
+            --size "$(stat -f%z "$ipa")" \
+            --date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --notes "Ketch $TAG + UC browser patch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add source.json
+          git commit -m "Ketch UC $TAG"
+          git pull --rebase
+          git push

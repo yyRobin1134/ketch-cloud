@@ -1,0 +1,24 @@
+{
+  "name": "Ketch UC Source",
+  "subtitle": "Ketch + UC 网盘浏览器补丁",
+  "description": "linroid/Ketch 的修改版：iOS 内置 UC 网盘浏览器，登录后把下载连同 Cookie 交给 Ketch。适用于 SideStore / LiveContainer。",
+  "iconURL": "https://raw.githubusercontent.com/linroid/Ketch/main/app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+  "website": "https://github.com/linroid/Ketch",
+  "tintColor": "#3D7BFF",
+  "apps": [
+    {
+      "name": "Ketch (UC)",
+      "bundleIdentifier": "com.linroid.ketch.app.uc",
+      "developerName": "linroid (patched)",
+      "subtitle": "下载管理器 + UC 浏览器",
+      "localizedDescription": "Ketch 是一个开源下载管理器（Apache-2.0）。此版本加入 UC 按钮：在应用内网页登录 drive.uc.cn，再把下载连同本机 Cookie 交给 Ketch。\n原项目：https://github.com/linroid/Ketch",
+      "iconURL": "https://raw.githubusercontent.com/linroid/Ketch/main/app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+      "tintColor": "#3D7BFF",
+      "category": "utilities",
+      "screenshotURLs": [],
+      "versions": [],
+      "appPermissions": { "entitlements": [], "privacy": {} }
+    }
+  ],
+  "news": []
+}
