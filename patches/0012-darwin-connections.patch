@@ -1,0 +1,45 @@
+--- a/library/ktor/src/iosMain/kotlin/com/linroid/ketch/engine/DarwinTransports.kt
++++ b/library/ktor/src/iosMain/kotlin/com/linroid/ketch/engine/DarwinTransports.kt
+@@ -19,6 +19,12 @@
+ import platform.Foundation.NSURLSessionAuthChallengeUseCredential
+ import platform.Foundation.credentialWithUser
+ 
++/**
++ * NSURLSession allows only a few connections to one host unless told otherwise (6 on iOS), so a
++ * download split into 24 or 32 connections ran most of them one after another at 0 B/s.
++ */
++private const val MAX_CONNECTIONS_PER_HOST = 64L
++
+ internal actual fun defaultTransports(): HttpTransports = DarwinTransports()
+ 
+ /**
+@@ -52,8 +58,11 @@
+   @OptIn(ExperimentalForeignApi::class)
+   private fun DarwinClientEngineConfig.configure(route: ProxyRoute) {
+     when (route) {
+-      ProxyRoute.Platform -> Unit
+-      ProxyRoute.Direct -> configureSession { connectionProxyDictionary = emptyMap<Any?, Any?>() }
++      ProxyRoute.Platform -> configureSession { HTTPMaximumConnectionsPerHost = MAX_CONNECTIONS_PER_HOST }
++      ProxyRoute.Direct -> configureSession {
++        connectionProxyDictionary = emptyMap<Any?, Any?>()
++        HTTPMaximumConnectionsPerHost = MAX_CONNECTIONS_PER_HOST
++      }
+       is ProxyRoute.Http -> {
+         configureSession {
+           connectionProxyDictionary = mapOf<Any?, Any?>(
+@@ -64,6 +73,7 @@
+             "HTTPSProxy" to route.host,
+             "HTTPSPort" to route.port,
+           )
++          HTTPMaximumConnectionsPerHost = MAX_CONNECTIONS_PER_HOST
+         }
+         route.credentials?.let { credentials ->
+           // Answers the proxy's challenges only; servers' go on as they would without this.
+@@ -92,6 +102,7 @@
+           entries[key(kCFStreamPropertySOCKSPassword)] = it.password
+         }
+         connectionProxyDictionary = entries
++        HTTPMaximumConnectionsPerHost = MAX_CONNECTIONS_PER_HOST
+       }
+     }
+   }
