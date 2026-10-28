@@ -19,11 +19,11 @@
       "versions": [
         {
           "version": "0.10.1",
-          "buildVersion": "11",
-          "date": "2026-10-28T01:51:30Z",
+          "buildVersion": "12",
+          "date": "2026-10-28T03:05:04Z",
           "localizedDescription": "Ketch v0.10.1 + cloud-drive patches",
           "downloadURL": "https://github.com/yyRobin1134/ketch-cloud/releases/download/cloud-v0.10.1/ketch-cloud-ios-0.10.1.ipa",
-          "size": 31097032,
+          "size": 31097031,
           "minOSVersion": "15.0"
         }
       ],
@@ -32,9 +32,9 @@
         "privacy": {}
       },
       "version": "0.10.1",
-      "versionDate": "2026-10-28T01:51:30Z",
+      "versionDate": "2026-10-28T03:05:04Z",
       "downloadURL": "https://github.com/yyRobin1134/ketch-cloud/releases/download/cloud-v0.10.1/ketch-cloud-ios-0.10.1.ipa",
-      "size": 31097032,
+      "size": 31097031,
       "versionDescription": "Ketch v0.10.1 + cloud-drive patches"
     }
   ],
