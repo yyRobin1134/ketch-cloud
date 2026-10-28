@@ -523,7 +523,7 @@ class LanzouApi(
             // 下载接口可能在同源，也可能在 apifile.woozooo.com（新版页面用 domain1/domain2 给出完整 URL）
             val ajaxUrl = resolveAjaxUrl(html, origin, fileId, withPwd)
             // 新版页面签名变量为 wp_sign（旧版为 sign）
-            val sign = jsVar(html, "wp_sign") ?: jsVar(html, "sign") ?: inputValue(html, "sign")
+            val sign = signFromPage(html) ?: jsVar(html, "wp_sign") ?: jsVar(html, "sign") ?: inputValue(html, "sign")
                 ?: throw IllegalStateException("蓝奏分享页缺少下载参数，请重新解析")
             val ajaxData = jsVar(html, "ajaxdata")
             val kd = jsVarRaw(html, "kdns") ?: "1"
@@ -958,6 +958,20 @@ class LanzouApi(
 
     private fun jsVar(html: String, name: String): String? =
         Regex("""(?:(?:var|let|const)\s+)?$name\s*=\s*['"]([^'"]*)['"]""").find(html)?.groupValues?.get(1)
+
+    /**
+     * The sign the page really posts: newer pages name the variable differently from run to run
+     * (`isngis`, `wp_sign`, ...), so it is found through the `'sign': <name>` of the live request
+     * and the last non-empty assignment of that name is used.
+     */
+    internal fun signFromPage(html: String): String? {
+        val live = html.lines().filterNot { it.trimStart().startsWith("//") }
+        val name = live.firstNotNullOfOrNull {
+            Regex("""['"]sign['"]\s*:\s*([A-Za-z_][A-Za-z0-9_]*)""").find(it)?.groupValues?.get(1)
+        } ?: return null
+        val assign = Regex("""(?:var|let|const)?\s*\b$name\s*=\s*['"]([^'"]+)['"]""")
+        return live.flatMap { assign.findAll(it).map { m -> m.groupValues[1] }.toList() }.lastOrNull()
+    }
 
     /** 读取未加引号的 JS 变量值（如 `var kdns = 0`）。 */
     private fun jsVarRaw(html: String, name: String): String? =
