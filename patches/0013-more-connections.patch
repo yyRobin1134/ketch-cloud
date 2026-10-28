@@ -1,0 +1,53 @@
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/components/ConnectionStepper.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/components/ConnectionStepper.kt
+@@ -53,7 +53,7 @@
+ import kotlin.time.Duration.Companion.milliseconds
+ 
+ /** Connection counts a task can ask for. */
+-val ConnectionRange: IntRange = 1..32
++val ConnectionRange: IntRange = 1..64
+ 
+ /** Peer limits a torrent can ask for, in steps of [PEER_LIMIT_STEP]. */
+ val PeerLimitRange: IntRange = 1..512
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IntakeState.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/state/IntakeState.kt
+@@ -907,7 +907,7 @@
+   val single: IntakeEntry? get() = entries.singleOrNull()?.takeIf { it.linkCount == 1 }
+ 
+   /**
+-   * Connections the links allow: up to the most segments a checked link supports, at most 32;
++   * Connections the links allow: up to the most segments a checked link supports, at most 64;
+    * each download still uses no more than its own server allows. `null` when no link was
+    * checked yet.
+    */
+@@ -1979,7 +1979,7 @@
+     val SUBMIT_CHECK_WAIT = 10.seconds
+ 
+     /** Most connections the sheet offers. */
+-    const val MAX_CONNECTIONS = 32
++    const val MAX_CONNECTIONS = 64
+ 
+     /** Clipboard text searched for links. */
+     const val MAX_CLIP_CHARS = 64 * 1024
+--- a/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/ui/downloads/actions/RowMenu.kt
++++ b/app/shared/src/commonMain/kotlin/com/linroid/ketch/app/ui/downloads/actions/RowMenu.kt
+@@ -353,7 +353,7 @@
+ )
+ 
+ /** Connection counts a row menu offers; torrents get [PeerLimits]. */
+-internal val ConnectionCounts: List<Int> = listOf(1, 2, 4, 8, 16, 32)
++internal val ConnectionCounts: List<Int> = listOf(1, 2, 4, 8, 16, 32, 64)
+ 
+ /** Peer limits a torrent's row menu offers. */
+ internal val PeerLimits: List<Int> = listOf(10, 20, 50, 100, 200, 500)
+--- a/library/api/src/commonMain/kotlin/com/linroid/ketch/api/DownloadConfig.kt
++++ b/library/api/src/commonMain/kotlin/com/linroid/ketch/api/DownloadConfig.kt
+@@ -48,7 +48,7 @@
+   val bufferSize: Int = 8 * 1024,
+   val speedLimit: SpeedLimit = SpeedLimit.Unlimited,
+   val maxConcurrentDownloads: Int = 4,
+-  val maxConnectionsPerDownload: Int = 4,
++  val maxConnectionsPerDownload: Int = 16,
+   val maxConnectionsPerHost: Int = 16,
+   val proxy: Proxy = Proxy.System,
+   val categories: List<DownloadCategory> = emptyList(),
