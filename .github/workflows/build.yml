@@ -64,6 +64,13 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # The Kotlin/Native toolchain and its prebuilt dependencies, otherwise downloaded every run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ needs.check.outputs.tag }}
+          restore-keys: konan-${{ runner.os }}-
+
       - name: Add the cloud module and apply patches
         working-directory: ketch
         run: |
@@ -77,6 +84,14 @@ jobs:
           # A distinct bundle id so this build installs next to upstream Ketch.
           sed -i '' 's/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app;/PRODUCT_BUNDLE_IDENTIFIER = com.linroid.ketch.app.cloud;/' app/ios/Ketch.xcodeproj/project.pbxproj
           grep -n PRODUCT_BUNDLE_IDENTIFIER app/ios/Ketch.xcodeproj/project.pbxproj
+
+      # The long part, run on its own so its progress is visible; the Xcode build below then
+      # finds the framework already built (or takes it from the Gradle build cache).
+      - name: Compile the Kotlin framework
+        working-directory: ketch
+        run: |
+          version=${TAG#v}
+          ORG_GRADLE_PROJECT_VERSION_NAME=$version           GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx6g           ./gradlew :app:shared:linkReleaseFrameworkIosArm64 --build-cache --parallel --console=plain
 
       - name: Build app
         working-directory: ketch
